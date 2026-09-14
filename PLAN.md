@@ -7,7 +7,7 @@ One scheduler runs persistent CRON Tasks.
 
 | File | Purpose |
 | --- | --- |
-| `app.py` | HTTP routes, authentication, and download control |
+| `app.py` | HTTP routes and download control |
 | `scheduler.py` | URL rules, CRON schedules, and Task checks |
 | `state.py` | SQLite state and process lock |
 | `recording_worker.py` | yt-dlp, FFmpeg Stop, and final file checks |
@@ -53,13 +53,11 @@ A replacement process cannot start while those workers still hold the lock.
 On restart, unfinished jobs and checks become interrupted. Files, completed
 links, request keys, and Tasks remain.
 
-## UI and access
+## UI
 
 Tasks use HTML forms and no JavaScript. Downloads use a short status refresh
 script. Stop uses a form. The UI has no help text.
 
-An optional token protects the API, UI, and file routes. Browsers use a signed
-session after login. Login and static files remain public.
 See the [API guide](docs/api.md) for requests and errors.
 
 ## Backend

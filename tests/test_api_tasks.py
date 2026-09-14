@@ -30,17 +30,12 @@ class ApiTaskTests(unittest.TestCase):
                                        WORKER=ROOT / "tests/fixtures/control_worker.py")
         self.patch_app.start()
         self.addCleanup(self.patch_app.stop)
-        self.patch_config = patch.dict(web.app.config, {"TESTING": True, "API_TOKEN": "test-token"})
+        self.patch_config = patch.dict(web.app.config, {"TESTING": True})
         self.patch_config.start()
         self.addCleanup(self.patch_config.stop)
         web.jobs.clear(); web.complete.clear(); web.errors.clear()
         web.init_runtime()
-        self.client = self.client_for_token()
-
-    def client_for_token(self):
-        client = web.app.test_client()
-        client.environ_base["HTTP_AUTHORIZATION"] = "Bearer test-token"
-        return client
+        self.client = web.app.test_client()
 
     def wait_for(self, check):
         until = time.monotonic() + 10
@@ -89,7 +84,7 @@ class ApiTaskTests(unittest.TestCase):
 
     def test_parallel_requests_ui_and_completed_idempotency(self):
         def submit(index):
-            client = self.client_for_token()
+            client = web.app.test_client()
             return client.post("/api/v1/downloads", json={"url": f"https://EXAMPLE.test:443/live#view-{index}"}).get_json()
         with ThreadPoolExecutor(max_workers=12) as pool:
             responses = list(pool.map(submit, range(24)))
@@ -126,25 +121,17 @@ class ApiTaskTests(unittest.TestCase):
         self.assertEqual(checked["last_job_id"], job["id"])
         self.assertEqual(len(web.jobs), 1)
 
-    def test_auth_protects_api_ui_and_files_without_token_in_page(self):
-        anonymous = web.app.test_client()
-        for path in ("/api/v1/downloads", "/api/v1/tasks", "/api/v1/health", "/api/v1/downloads/no/file"):
-            response = anonymous.get(path)
-            self.assertEqual(response.status_code, 401)
-            self.assertIn("error", response.get_json())
-        self.assertEqual(anonymous.post("/", data={"url": "https://example.test/live"}).status_code, 303)
-        self.assertEqual(anonymous.post("/stop/no").status_code, 303)
-        self.assertEqual(anonymous.get("/download/no").status_code, 303)
-        with anonymous.get("/static/app.css") as response:
+    def test_routes_and_cross_site_requests(self):
+        for path in ("/", "/tasks", "/status", "/api/v1/downloads", "/api/v1/tasks", "/api/v1/health"):
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 200, path)
+            self.assertNotIn("Set-Cookie", response.headers)
+        for path in ("/api/v1/downloads/no/file", "/download/no"):
+            self.assertEqual(self.client.get(path).status_code, 404)
+        with self.client.get("/static/app.css") as response:
             self.assertEqual(response.status_code, 200)
-        self.assertEqual(anonymous.post("/login", data={"token": "wrong"}).status_code, 401)
-        self.assertEqual(anonymous.post("/login", data={"token": "test-token"}).status_code, 303)
-        self.assertEqual(anonymous.get("/api/v1/tasks").status_code, 200)
-        self.assertEqual(anonymous.get("/tasks").status_code, 200)
-        self.assertEqual(anonymous.get("/shortcut").status_code, 404)
-        self.assertEqual(anonymous.post("/api/v1/tasks", json={}, headers={"Origin": "https://other.test"}).status_code, 403)
-        anonymous.post("/logout")
-        self.assertEqual(anonymous.get("/api/v1/tasks").status_code, 401)
+        for headers in ({"Origin": "https://other.test"}, {"Sec-Fetch-Site": "cross-site"}):
+            self.assertEqual(self.client.post("/api/v1/tasks", json={}, headers=headers).status_code, 403)
         self.assertFalse(web.jobs)
 
     def test_server_rendered_task_forms(self):

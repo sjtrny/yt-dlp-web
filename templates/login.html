@@ -1,7 +1,0 @@
-{% extends "base.html" %}
-{% block title %}Login · yt-dlp-web{% endblock %}
-{% block content %}
-<h1>Login</h1>
-<form method="post"><label>Token<input name="token" type="password" required autofocus></label><button>Login</button></form>
-{% if error %}<p class="error">{{ error }}</p>{% endif %}
-{% endblock %}

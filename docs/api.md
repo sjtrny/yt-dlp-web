@@ -3,12 +3,9 @@
 Base path: `/api/v1`. Send JSON objects with `Content-Type: application/json`.
 The request body limit is 16 KiB. Unknown fields return 400.
 
-If `YTDLP_API_TOKEN` is set, send `Authorization: Bearer TOKEN` on every route.
-A signed browser session also works. Tokens in URLs are not accepted.
 Cross-site browser writes are rejected.
 
-Examples use `SERVER=http://localhost:8080`. Set `YTDLP_API_TOKEN` to the server
-token. Omit the Authorization header if authentication is disabled.
+Examples use `SERVER=http://localhost:8080`.
 
 ## Routes
 
@@ -34,7 +31,6 @@ Paths below are relative to `/api/v1`. Braces identify path parameters.
 ```sh
 SERVER=http://localhost:8080
 curl -X POST "$SERVER/api/v1/downloads" \
-  -H "Authorization: Bearer $YTDLP_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: request-001' \
   -d '{"url":"https://example.com/video"}'
@@ -117,8 +113,7 @@ Active URL protection continues until the worker exits, including finalization.
 ### Stop
 
 ```sh
-curl -X POST "$SERVER/api/v1/downloads/JOB_ID/stop" \
-  -H "Authorization: Bearer $YTDLP_API_TOKEN"
+curl -X POST "$SERVER/api/v1/downloads/JOB_ID/stop"
 ```
 
 No body is required. Wait for `can_stop: true` before the first request.
@@ -132,7 +127,6 @@ finalization. It does not force-cancel a job. Poll until the job ends.
 
 ```sh
 curl -X POST "$SERVER/api/v1/tasks" \
-  -H "Authorization: Bearer $YTDLP_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"name":"Live check","url":"https://example.com/channel/live","cron":"*/5 * * * *","timezone":"UTC","mode":"live","enabled":true}'
 ```
@@ -191,7 +185,6 @@ See [Task results](tasks.md#results) and [duplicate rules](tasks.md#duplicate-ru
 | Status | Meaning |
 | --- | --- |
 | 400 | Invalid URL, JSON, field, or schedule |
-| 401 | Missing or invalid token; includes `WWW-Authenticate: Bearer` |
 | 403 | Cross-site browser write |
 | 404 | Unknown job or Task, or missing completed file |
 | 405 | Wrong HTTP method |

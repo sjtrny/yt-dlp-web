@@ -24,14 +24,14 @@ test('server-rendered UI', async () => {
       `from pathlib import Path; import app; app.WORKER = Path('tests/fixtures/control_worker.py').resolve(); app.init_runtime(); app.app.run(host='127.0.0.1', port=${port}, threaded=True)`], {
       cwd: root,
       env: {...process.env, YTDLP_DOWNLOAD_DIR: directory, YTDLP_STATE_DIR: path.join(directory, 'state'),
-        YTDLP_TEST_BARRIER_DIR: directory, YTDLP_SCHEDULER_ENABLED: '0', YTDLP_API_TOKEN: 'browser-token'},
+        YTDLP_TEST_BARRIER_DIR: directory, YTDLP_SCHEDULER_ENABLED: '0'},
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     server.stdout.on('data', data => { logs += data; });
     server.stderr.on('data', data => { logs += data; });
     for (let attempt = 0; attempt < 100; attempt++) {
       assert.equal(server.exitCode, null, logs);
-      try { if ((await fetch(`${url}/login`)).ok) return; } catch {}
+      try { if ((await fetch(`${url}/api/v1/health`)).ok) return; } catch {}
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     throw new Error(logs);
@@ -49,9 +49,7 @@ test('server-rendered UI', async () => {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
 
-    await page.goto(`${url}/tasks`);
-    await page.getByLabel('Token').fill('browser-token');
-    await page.getByRole('button', {name: 'Login'}).click();
+    await page.goto(url);
     await page.getByRole('link', {name: 'Tasks'}).click();
     assert.equal(await page.locator('script').count(), 0);
     assert.deepEqual(await page.locator('nav a').allTextContents(), ['Downloads', 'Tasks']);

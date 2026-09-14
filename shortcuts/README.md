@@ -10,8 +10,8 @@ URLs and Safari Web Pages. It sends the first URL to `POST /api/v1/downloads`.
 It shows the accepted job ID or the server response. Acceptance does not mean
 the download is complete.
 
-The template contains a placeholder endpoint and an empty token. It is not a
-signed installer. Signing, import, and use on an iPhone have not been tested.
+The template contains a placeholder endpoint. It is not a signed installer.
+Signing, import, and use on an iPhone have not been tested.
 The file structure and server API have been checked.
 
 ### Build and sign on Mac
@@ -25,16 +25,12 @@ shortcuts sign --mode anyone \
   --output 'shortcuts/Download with yt-dlp-web.shortcut'
 ```
 
-Sign the placeholder template. Add the real endpoint and token after import.
+Sign the placeholder template. Set the real endpoint after import.
 Apple receives a copy during signing. See [Apple's signing guide](https://support.apple.com/guide/shortcuts-mac/apd455c82f02/mac).
 
 Send the signed file to the iPhone with AirDrop. Open it in Shortcuts.
-Set the import fields:
-
-| Field | Value |
-| --- | --- |
-| API URL | Full endpoint, such as `https://your-server.example/api/v1/downloads` |
-| Token (optional) | Server API token, without `Bearer `; leave empty if unused |
+Set **API URL** to the full endpoint, such as
+`https://your-server.example/api/v1/downloads`.
 
 The iPhone must be able to reach the server. `localhost` refers to the phone.
 The generated signed file is ignored by Git.
@@ -50,9 +46,7 @@ The generated signed file is ignored by Git.
 4. Set the method to **POST** and the request body to **JSON**. Add a Text field:
    key `url`, value **First Item**. Use the variable, not typed JSON.
    See [Apple's API guide](https://support.apple.com/guide/shortcuts/apd58d46713f/ios).
-5. If authentication is enabled, add the `Authorization` header with value
-   `Bearer YOUR_API_TOKEN`. Otherwise, omit the header.
-6. Add **Get Dictionary Value** with key `job.id` from the HTTP response.
+5. Add **Get Dictionary Value** with key `job.id` from the HTTP response.
    Add **If** the value is present, then **Show Notification** with the job ID.
    In **Otherwise**, use **Show Result** with the HTTP response.
 
@@ -61,9 +55,6 @@ The generated signed file is ignored by Git.
 1. Open a video page in Safari.
 2. Select **Share**, then **Download with yt-dlp-web**.
 3. Check the job on the server's **Downloads** page.
-
-The template always sends the Authorization header. An empty token is accepted
-only when server authentication is disabled.
 
 ## Retries
 

@@ -1,8 +1,4 @@
-"""Build an unsigned Apple Shortcuts template with no embedded credentials.
-
-Sign on macOS before sharing. See README.md for the no-Mac setup recipe.
-Only Python's standard library is required.
-"""
+"""Build the unsigned iOS Shortcut with Python's standard library."""
 
 from pathlib import Path
 import plistlib
@@ -43,12 +39,10 @@ def build():
     group = identifier("response-branch")
     actions = [
         action("gettext", "endpoint", WFTextActionText="https://your-server.example/api/v1/downloads"),
-        action("gettext", "token", WFTextActionText=""),
         action("detect.link", "urls", WFInput=text(variable={"Type": "ExtensionInput"})),
         action("getitemfromlist", "first-url", WFInput=attachment(output("urls", "URLs")), WFItemSpecifier="First Item"),
         action("downloadurl", "request", WFURL=text(variable=output("endpoint", "Text")),
-               WFHTTPMethod="POST", WFHTTPBodyType="JSON", ShowHeaders=True,
-               WFHTTPHeaders=dictionary({"Authorization": text("Bearer ", output("token", "Text"))}),
+               WFHTTPMethod="POST", WFHTTPBodyType="JSON",
                WFJSONValues=dictionary({"url": text(variable=output("first-url", "Item from List"))})),
         action("getvalueforkey", "job-id", WFInput=attachment(output("request", "Contents of URL")),
                WFGetDictionaryValueType="Value", WFDictionaryKey="job.id"),
@@ -72,8 +66,6 @@ def build():
             {"Category": "Parameter", "ActionIndex": 0, "ParameterKey": "WFTextActionText",
              "Text": "API URL",
              "DefaultValue": "https://your-server.example/api/v1/downloads"},
-            {"Category": "Parameter", "ActionIndex": 1, "ParameterKey": "WFTextActionText",
-             "Text": "Token (optional)", "DefaultValue": ""},
         ],
     }
 

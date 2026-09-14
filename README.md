@@ -5,7 +5,7 @@ scheduled Tasks. The UI uses HTML forms and a short status refresh script.
 
 | Guide | Contents |
 | --- | --- |
-| [HTTP API](docs/api.md) | Routes, authentication, responses, and retries |
+| [HTTP API](docs/api.md) | Routes, responses, and retries |
 | [iOS Shortcut](shortcuts/README.md) | Safari sharing, setup, and template |
 | [Tasks](docs/tasks.md) | Controls, CRON schedules, and duplicate rules |
 | [Design](PLAN.md) | Files and runtime behavior |
@@ -30,17 +30,11 @@ Finish active recordings before you restart the app.
 | --- | --- | --- |
 | `YTDLP_DOWNLOAD_DIR` | `/downloads` | Existing writable media directory |
 | `YTDLP_STATE_DIR` | `<download-dir>/.yt-dlp-web` | Persistent state directory |
-| `YTDLP_API_TOKEN` | Empty | Shared API and browser token |
 | `YTDLP_SCHEDULER_ENABLED` | `1` | Set to `0` to stop automatic checks |
 | `YTDLP_OVERRIDE_DIR` | Unset | Complete custom yt-dlp package directory |
 
 Set variables with Docker `--env` or in the local process environment.
 Mount media and state on persistent storage.
-
-With a token set, API clients send `Authorization: Bearer TOKEN`.
-Browsers sign in at `/login` with the same token. File downloads also require
-authentication. A token change invalidates browser sessions. Without a token,
-the app does not require login. Use HTTPS outside a trusted local network.
 
 ## Downloads and Stop
 

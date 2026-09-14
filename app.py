@@ -1,6 +1,4 @@
 from datetime import datetime, timezone
-import hashlib
-import hmac
 import json
 import os
 from pathlib import Path
@@ -12,19 +10,14 @@ import time
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from flask import abort, Flask, jsonify, redirect, render_template, request, send_file, session
+from flask import abort, Flask, jsonify, redirect, render_template, request, send_file
 from werkzeug.exceptions import HTTPException
 
 from scheduler import normalize_url, TaskScheduler
 from state import ACTIVE_STATES, StateStore
 
 app = Flask(__name__)
-API_TOKEN = os.environ.get("YTDLP_API_TOKEN", "")
-app.config.update(
-    API_TOKEN=API_TOKEN,
-    SECRET_KEY=hashlib.sha256(("yt-dlp-web-session:" + API_TOKEN).encode()).digest() if API_TOKEN else os.urandom(32),
-    SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict", MAX_CONTENT_LENGTH=16384,
-)
+app.config["MAX_CONTENT_LENGTH"] = 16384
 jobs = []
 complete = []
 errors = []
@@ -148,20 +141,12 @@ def task_json(task):
 
 
 @app.before_request
-def authenticate_and_initialize():
+def prepare_request():
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         origin = request.headers.get("Origin")
         if (origin and urlsplit(origin).netloc != request.host) or request.headers.get("Sec-Fetch-Site") == "cross-site":
             abort(403, "Cross-origin requests are not allowed")
-    token = app.config["API_TOKEN"]
-    if token and request.endpoint not in ("login", "static"):
-        bearer = request.headers.get("Authorization", "")
-        authorized = hmac.compare_digest(bearer.encode(), ("Bearer " + token).encode())
-        if not authorized and not session.get("authenticated"):
-            if request.path.startswith("/api/"):
-                abort(401, "A valid Bearer API token is required")
-            return redirect("/login", code=303)
-    if request.endpoint not in ("login", "static"):
+    if request.endpoint != "static":
         init_runtime()
 
 
@@ -170,8 +155,6 @@ def response_headers(response):
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
-    if response.status_code == 401:
-        response.headers["WWW-Authenticate"] = "Bearer"
     return response
 
 
@@ -190,25 +173,6 @@ def validation_error(error):
     if request.path.startswith("/api/"):
         return jsonify(error={"code": "invalid_request", "message": str(error)}), 400
     return render_template("error.html", message=str(error)), 400
-
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if not app.config["API_TOKEN"]:
-        return redirect("/")
-    if request.method == "POST":
-        if hmac.compare_digest(request.form.get("token", "").encode(), app.config["API_TOKEN"].encode()):
-            session.clear()
-            session["authenticated"] = True
-            return redirect("/", code=303)
-        return render_template("login.html", error="Invalid API token"), 401
-    return render_template("login.html")
-
-
-@app.post("/logout")
-def logout():
-    session.clear()
-    return redirect("/login", code=303)
 
 
 def download(job):
