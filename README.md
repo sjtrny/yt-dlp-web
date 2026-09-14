@@ -23,6 +23,21 @@ Open <http://localhost:8080>. The image includes upstream yt-dlp and FFmpeg.
 Files, job history, Tasks, and request keys stay in the mounted directory.
 Finish active recordings before you restart the app.
 
+## Publish image
+
+The [workflow](.github/workflows/publish.yml) publishes `linux/amd64` images to
+`ghcr.io/<owner>/<repository>`. It runs on pushes to `main`, tags that start with
+`v`, and manual runs.
+
+| Image tag | Source |
+| --- | --- |
+| `latest` | `main` only |
+| `v1.2.3` | Matching Git tag |
+| `sha-<short-sha>` | Every run |
+
+GitHub supplies `GITHUB_TOKEN`; no extra secret is needed. See
+[GitHub's publishing guide](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images).
+
 ## Configuration
 
 | Variable | Default | Use |
