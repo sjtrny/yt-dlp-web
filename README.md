@@ -1,15 +1,23 @@
 # yt-dlp-web
 
-A small Flask app for yt-dlp. Download videos, record live streams, and run
-scheduled Tasks. The UI uses HTML forms and a short status refresh script.
+Download videos and record live streams with yt-dlp from a web browser. Files
+stay on the server.
 
-| Guide | Contents |
+- Download a URL now.
+- Stop a live recording and keep the recorded video.
+- Check a URL on a CRON schedule.
+- Control downloads and Tasks through an HTTP API.
+- Send the current Safari page from an iPhone.
+
+| Guide | Use |
 | --- | --- |
-| [HTTP API](docs/api.md) | Routes, responses, and retries |
-| [iOS Shortcut](shortcuts/README.md) | Safari sharing, setup, and template |
-| [Tasks](docs/tasks.md) | Controls, CRON schedules, and duplicate rules |
+| [HTTP API](docs/api.md) | Start and manage downloads and Tasks |
+| [iOS Shortcut](shortcuts/README.md) | Send a Safari URL to the server |
+| [Tasks](docs/tasks.md) | Set automatic URL checks |
 
-## Build and run
+## Start
+
+Build and run the Docker image:
 
 ```sh
 docker build -t yt-dlp-web:local .
@@ -19,157 +27,86 @@ docker run --name yt-dlp-web --rm -p 127.0.0.1:8080:8080 \
   yt-dlp-web:local
 ```
 
-Open <http://localhost:8080>. The image includes upstream yt-dlp and FFmpeg.
-Files, job history, Tasks, and request keys stay in the mounted directory.
-Finish active recordings before you restart the app.
+Open <http://localhost:8080>. The image includes yt-dlp and FFmpeg. The mounted
+`downloads` directory stores media, download history, and Tasks.
 
-## Publish image
+## Download
 
-The [workflow](.github/workflows/publish.yml) publishes `linux/amd64` images to
-`ghcr.io/<owner>/<repository>`. It runs on pushes to `main`, tags that start with
-`v`, and manual runs.
+Enter a video or stream URL, then select **Download**. The Downloads page shows
+the current status. Select a completed title to get its file.
 
-| Image tag | Source |
-| --- | --- |
-| `latest` | `main` only |
-| `v1.2.3` | Matching Git tag |
-| `sha-<short-sha>` | Every run |
+Only one download can be active for the same URL. You can download different
+URLs at the same time.
 
-GitHub supplies `GITHUB_TOKEN`; no extra secret is needed. See
-[GitHub's publishing guide](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images).
+Select **Stop** to end a live recording. Wait for **Complete** before you use
+the file. Other downloads continue.
+
+## Tasks
+
+A Task checks one URL on a CRON schedule. Open **Tasks** to add or change one.
+
+- **Live** starts a download only when the URL has a live stream.
+- **Always** starts a download each time the schedule runs.
+- **Enabled** starts or pauses automatic checks.
+- **Run** checks the URL now.
+
+The scheduler runs while the app runs. A check does not start a second download
+when the same URL is already active. See the [Tasks guide](docs/tasks.md) for
+CRON examples and all controls.
+
+Pause a Task before you stop its live recording. This prevents the next check
+from starting it again.
+
+## iPhone
+
+Use the iOS Shortcut to send the current Safari page to the server. The server
+downloads the video. The file stays on the server. See the
+[iOS Shortcut guide](shortcuts/README.md).
+
+## HTTP API
+
+Use the API to start downloads, read status, stop live recordings, and manage
+Tasks. See the [HTTP API guide](docs/api.md).
+
+## Storage and restart
+
+Keep the downloads directory on persistent storage. It contains media, history,
+and Tasks.
+
+After a restart, completed downloads and Tasks remain. An unfinished download
+becomes **Interrupted** and does not resume. Its partial file remains. Finish
+active recordings before you restart the app.
+
+Use only one app instance for each state directory.
 
 ## Configuration
 
 | Variable | Default | Use |
 | --- | --- | --- |
-| `YTDLP_DOWNLOAD_DIR` | `/downloads` | Existing writable media directory |
-| `YTDLP_STATE_DIR` | `<download-dir>/.yt-dlp-web` | Persistent state directory |
-| `YTDLP_OVERRIDE_DIR` | Unset | Complete custom yt-dlp package directory |
+| `YTDLP_DOWNLOAD_DIR` | `/downloads` | Media directory |
+| `YTDLP_STATE_DIR` | `<download-dir>/.yt-dlp-web` | History and Tasks directory |
+| `YTDLP_OVERRIDE_DIR` | Unset | Optional custom yt-dlp package |
 
-Set variables with Docker `--env` or in the local process environment.
-Mount media and state on persistent storage.
+Pass variables to Docker with `--env NAME=value`.
 
-## Downloads and Stop
+## Optional custom yt-dlp
 
-Enter a URL and select **Download**. Select a completed title to get its file.
-The API and Tasks use the same download service.
-
-Only one download per normalized URL can be active. Each distinct URL gets a
-worker. There is no queue or application limit on concurrent downloads.
-
-Select **Stop** to end a live FFmpeg recording. Wait for **Complete** before
-you use the file or restart the app. Other downloads continue. Repeated Stop
-requests are safe. Ordinary downloads do not have a Stop control.
-
-FFmpeg closes the recording normally. The worker checks the file and converts
-live MPEG-TS data to MP4 when needed, without re-encoding. It keeps the original
-file until the new file passes the check. This step needs temporary disk space.
-
-## State and restart
-
-State is stored in `state.sqlite3`. Run one app process per state directory.
-Use local storage with SQLite and file-lock support. Keep `owner.lock` in place
-while the app or its workers run. A second process cannot use the same state.
-Workers keep the lock until they exit, even if the app has stopped.
-
-After restart, unfinished jobs become `interrupted`. Partial files remain.
-The app does not resume them. Completed links, request keys, and Tasks remain.
-Old files with no stored job record do not get new download links.
-
-The scheduler always starts with the app. A custom server must call
-`app.init_runtime()` in one process before serving requests.
-Do not use a multi-process server.
-
-## Custom yt-dlp package
-
-1. Install the custom wheel into a new directory outside this repository.
-   Include its dependencies and `default,curl-cffi,deno` extras. Use the same
-   Python version, operating system, and architecture as the image.
-2. Include the full `yt_dlp/` package and its `yt_dlp-*.dist-info/` metadata.
-   A patched source file or standalone executable is not sufficient.
-3. Mount the directory read-only and set `YTDLP_OVERRIDE_DIR`:
-
-```sh
-docker run --name yt-dlp-web --rm -p 127.0.0.1:8080:8080 \
-  --env YTDLP_OVERRIDE_DIR=/opt/yt-dlp-override \
-  --mount type=bind,src=/absolute/custom-bundle,dst=/opt/yt-dlp-override,readonly \
-  --mount type=bind,src=/absolute/downloads,dst=/downloads \
-  yt-dlp-web:local
-```
-
-Mount sources must exist on the Docker host. The container user must be able
-to write to the downloads directory. Startup fails if it cannot write there.
-
-The entrypoint sets `PYTHONPATH` and adds the bundle's `bin/` to `PATH`.
-It checks the package and metadata before startup. An invalid or empty override
-fails startup. Logs show the selected package and version.
-
-Keep executable paths valid at the final mount location. Check native tools
-against the image. FFmpeg stays in the image.
-
-Use a separate bundle for each version. To update, finish active recordings
-and recreate the container with the new bundle. To return to a previous version,
-use its bundle and compatible image. Unset `YTDLP_OVERRIDE_DIR` to use upstream
-yt-dlp. Do not change a bundle while it is in use.
-
-The custom package must support the yt-dlp Python API. Stop also needs a live
-`FFmpegFD` recorder with interactive input. Check Stop after a backend update.
-Keep private packages and build records outside this repository and its image.
-
-## Extractor plugins
-
-Use the standard yt-dlp plugin layout outside this repository:
+The image uses the standard yt-dlp package. You can use a complete custom
+package from a directory outside this repository. Mount the directory as
+read-only and set `YTDLP_OVERRIDE_DIR` to its container path:
 
 ```text
-plugins/example-package/yt_dlp_plugins/extractor/example.py
+--env YTDLP_OVERRIDE_DIR=/opt/yt-dlp-override
+--mount type=bind,src=/absolute/custom-package,dst=/opt/yt-dlp-override,readonly
 ```
 
-Add this mount to the run command, then restart the app:
+The package must match the image platform and Python version. Restart the app
+after you change the package. Unset `YTDLP_OVERRIDE_DIR` to use standard yt-dlp.
+
+## Optional extractor plugins
+
+Mount a standard yt-dlp plugin directory as read-only, then restart the app:
 
 ```text
 --mount type=bind,src=/absolute/plugins,dst=/etc/yt-dlp/plugins,readonly
 ```
-
-The first `YoutubeDL` instance loads the plugins. The app has no custom plugin
-API or postprocessor plugin controls.
-
-## Local development
-
-```sh
-python -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-mkdir -p downloads
-YTDLP_DOWNLOAD_DIR="$PWD/downloads" .venv/bin/python entrypoint.py
-```
-
-Use the entrypoint to check and select the backend. Start another Python server
-with `.venv/bin/python entrypoint.py <command>`. Direct use of `app.py` skips
-the backend checks.
-
-Run the Python checks with FFmpeg available:
-
-```sh
-.venv/bin/python -m unittest discover -s tests -v
-```
-
-Run the browser check with Playwright and Chromium available:
-
-```sh
-node --test tests/tasks_ui.cjs
-```
-
-The browser check uses `.venv/bin/python`, or `PYTHON` if set. The checks use
-local media and temporary state. They do not change existing downloads.
-
-Check the image and system plugin mount without external network access:
-
-```sh
-docker run --rm --network none --read-only --tmpfs /tmp:exec \
-  --env YTDLP_TEST_SYSTEM_PLUGINS=1 \
-  --mount "type=bind,src=$(pwd)/tests,dst=/app/tests,readonly" \
-  --mount "type=bind,src=$(pwd)/tests/fixtures/yt-dlp/plugins,dst=/etc/yt-dlp/plugins,readonly" \
-  yt-dlp-web:local python -m unittest discover -s tests -v
-```
-
-The image includes only application files. It does not include tests, media,
-or custom packages.
