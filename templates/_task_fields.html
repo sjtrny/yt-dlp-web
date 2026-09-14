@@ -1,0 +1,8 @@
+{% macro fields(task) %}
+<label>Name<input name="name" maxlength="120" value="{{ task.name }}"></label>
+<label>URL<input name="url" type="url" required value="{{ task.url }}"></label>
+<label>CRON<input name="cron" required value="{{ task.cron }}"></label>
+<label>TZ<input name="timezone" required value="{{ task.timezone }}" list="timezones"></label>
+<label>Mode<select name="mode"><option value="live" {% if task.mode == "live" %}selected{% endif %}>Live</option><option value="download" {% if task.mode == "download" %}selected{% endif %}>Always</option></select></label>
+<label class="check"><input name="enabled" type="checkbox" {% if task.enabled %}checked{% endif %}>Enabled</label>
+{% endmacro %}

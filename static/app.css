@@ -1,0 +1,25 @@
+:root { color-scheme: light dark; font: 16px/1.4 system-ui, sans-serif; }
+body { max-width: 900px; margin: auto; padding: 1rem; }
+nav, .job, .actions { display: flex; align-items: center; gap: 1rem; }
+nav { border-bottom: 1px solid #8888; padding-bottom: 1rem; }
+nav strong { margin-right: auto; }
+h1 { font-size: 1.5rem; }
+h2 { font-size: 1.1rem; }
+form.download, section { margin: 1rem 0; }
+section { border-top: 1px solid #8888; padding-top: 1rem; }
+input, select, button { box-sizing: border-box; font: inherit; padding: .4rem; }
+.download input { width: min(40rem, 75%); }
+.task { display: grid; grid-template-columns: 1fr 2fr 1fr 1fr 1fr auto; gap: .75rem; align-items: end; }
+label { font-weight: 600; }
+label input, label select { display: block; width: 100%; margin-top: .2rem; font-weight: normal; }
+label.check { display: flex; gap: .4rem; align-items: center; padding-bottom: .5rem; }
+label.check input { width: auto; margin: 0; }
+.task > div { grid-column: 1 / -1; }
+.job { margin: .5rem 0; }
+.job form { margin-left: auto; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: .2rem .75rem; }
+dt { font-weight: bold; }
+dd { margin: 0; overflow-wrap: anywhere; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.error { color: #c44; }
+@media (max-width: 650px) { .task { grid-template-columns: 1fr; } .task > div { grid-column: auto; } nav { flex-wrap: wrap; } }

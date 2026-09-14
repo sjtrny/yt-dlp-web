@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% from "_task_fields.html" import fields %}
+{% block title %}Tasks · yt-dlp-web{% endblock %}
+{% block head %}{% if checking %}<meta http-equiv="refresh" content="2">{% endif %}{% endblock %}
+{% block content %}
+<h1>Tasks</h1>
+<datalist id="timezones"><option value="UTC"><option value="Australia/Sydney"><option value="Europe/London"><option value="America/New_York"></datalist>
+<section>
+  <h2>New</h2>
+  <form class="task" method="post">{{ fields(new_task) }}<div><button>Add</button></div></form>
+</section>
+{% for task in tasks %}
+<section id="task-{{ task.id }}">
+  <h2>{{ task.name }}</h2>
+  <form class="task" method="post" action="/tasks/{{ task.id }}/save">
+    {{ fields(task) }}
+    <div class="actions">
+      <button>Save</button>
+      <button formaction="/tasks/{{ task.id }}/run">Run</button>
+      <button formaction="/tasks/{{ task.id }}/delete">Delete</button>
+    </div>
+  </form>
+  <dl>
+    <dt>State</dt><dd>{{ task.last_result | replace("_", " ") }}</dd>
+    <dt>Checked</dt><dd>{{ task.last_checked_at or "—" }}</dd>
+    <dt>Next</dt><dd>{{ task.next_run_at or "—" }}</dd>
+  </dl>
+  {% if task.last_error %}<pre>{{ task.last_error }}</pre>{% endif %}
+  {% if task.last_job_id %}<a href="/#job-{{ task.last_job_id }}">Download</a>{% endif %}
+</section>
+{% endfor %}
+{% endblock %}
