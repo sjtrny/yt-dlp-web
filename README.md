@@ -8,7 +8,6 @@ scheduled Tasks. The UI uses HTML forms and a short status refresh script.
 | [HTTP API](docs/api.md) | Routes, responses, and retries |
 | [iOS Shortcut](shortcuts/README.md) | Safari sharing, setup, and template |
 | [Tasks](docs/tasks.md) | Controls, CRON schedules, and duplicate rules |
-| [Design](PLAN.md) | Files and runtime behavior |
 
 ## Build and run
 
