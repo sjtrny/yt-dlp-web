@@ -53,8 +53,7 @@ def init_runtime():
                 errors.append((job, job.get("error", "Download interrupted")))
         store = candidate
         scheduler = TaskScheduler(store, lock, submit_download, active_download, probe_live)
-        if os.environ.get("YTDLP_SCHEDULER_ENABLED", "1") != "0":
-            scheduler.start()
+        scheduler.start()
 
 
 def active_download(url):

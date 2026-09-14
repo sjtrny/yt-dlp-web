@@ -29,7 +29,6 @@ Finish active recordings before you restart the app.
 | --- | --- | --- |
 | `YTDLP_DOWNLOAD_DIR` | `/downloads` | Existing writable media directory |
 | `YTDLP_STATE_DIR` | `<download-dir>/.yt-dlp-web` | Persistent state directory |
-| `YTDLP_SCHEDULER_ENABLED` | `1` | Set to `0` to stop automatic checks |
 | `YTDLP_OVERRIDE_DIR` | Unset | Complete custom yt-dlp package directory |
 
 Set variables with Docker `--env` or in the local process environment.
@@ -62,10 +61,9 @@ After restart, unfinished jobs become `interrupted`. Partial files remain.
 The app does not resume them. Completed links, request keys, and Tasks remain.
 Old files with no stored job record do not get new download links.
 
-The default entrypoint starts the scheduler before serving requests. A custom
-server must call `app.init_runtime()` in one process before serving requests.
-Do not use a multi-process server. Manual Task runs remain available when
-automatic checks are disabled.
+The scheduler always starts with the app. A custom server must call
+`app.init_runtime()` in one process before serving requests.
+Do not use a multi-process server.
 
 ## Custom yt-dlp package
 

@@ -58,9 +58,8 @@ weekday names. If both day fields are restricted, either field can match.
 There is no seconds field, shell command, or random schedule.
 The expression must have a match within eight years and at most 200 characters.
 
-Automatic checks start with the app. Missed intervals produce one check, not
-one check per interval. Checks are not queued. Set `YTDLP_SCHEDULER_ENABLED=0`
-to disable automatic checks. Manual runs remain available.
+The scheduler always starts with the app. Missed intervals produce one check,
+not one check per interval. Checks are not queued.
 
 ## Duplicate rules
 

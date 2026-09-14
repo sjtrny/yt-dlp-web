@@ -24,7 +24,7 @@ test('server-rendered UI', async () => {
       `from pathlib import Path; import app; app.WORKER = Path('tests/fixtures/control_worker.py').resolve(); app.init_runtime(); app.app.run(host='127.0.0.1', port=${port}, threaded=True)`], {
       cwd: root,
       env: {...process.env, YTDLP_DOWNLOAD_DIR: directory, YTDLP_STATE_DIR: path.join(directory, 'state'),
-        YTDLP_TEST_BARRIER_DIR: directory, YTDLP_SCHEDULER_ENABLED: '0'},
+        YTDLP_TEST_BARRIER_DIR: directory},
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     server.stdout.on('data', data => { logs += data; });

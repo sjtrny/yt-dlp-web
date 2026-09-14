@@ -22,7 +22,7 @@ class ApiTaskTests(unittest.TestCase):
         self.temp = TemporaryDirectory(prefix="yt-dlp-web-api-")
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
-        self.patch_env = patch.dict(os.environ, {"YTDLP_SCHEDULER_ENABLED": "0", "YTDLP_STATE_DIR": str(self.directory / "state"),
+        self.patch_env = patch.dict(os.environ, {"YTDLP_STATE_DIR": str(self.directory / "state"),
                                                  "YTDLP_TEST_BARRIER_DIR": str(self.directory)})
         self.patch_env.start()
         self.addCleanup(self.patch_env.stop)
@@ -246,10 +246,16 @@ class ApiTaskTests(unittest.TestCase):
         self.finish(job)
         stale = dict(web.complete[0], id="interrupted-fixture", url="https://example.test/interrupted", status="recording")
         web.store.save_job(stale)
-        web.scheduler.stop(); web.store.close()
+        web.scheduler.stop()
+        scheduled = web.scheduler.save({"url": "https://example.test/offline"})
+        scheduled["next_run_at"] = time.time() - 60
+        web.store.save_task(scheduled)
+        web.store.close()
         web.store = None; web.scheduler = None
         web.jobs.clear(); web.complete.clear(); web.errors.clear()
         web.init_runtime()
+        self.wait_for(lambda: web.scheduler.get(scheduled["id"])["last_result"] == "offline")
+        self.assertEqual(web.scheduler.get(task["id"])["last_result"], "never")
         self.assertEqual(web.scheduler.get(task["id"])["url"], task["url"])
         self.assertEqual(self.submit(key="persisted-request").get_json()["job"]["id"], job["id"])
         self.assertEqual(self.client.get("/api/v1/downloads/interrupted-fixture").get_json()["job"]["status"], "interrupted")
