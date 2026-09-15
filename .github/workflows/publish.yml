@@ -3,8 +3,6 @@ name: Publish image
 on:
   push:
     branches: [main]
-    tags: ["v*"]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -27,8 +25,7 @@ jobs:
           flavor: latest=false
           tags: |
             type=sha
-            type=ref,event=tag
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
