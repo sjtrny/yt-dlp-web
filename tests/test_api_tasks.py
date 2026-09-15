@@ -61,8 +61,8 @@ class ApiTaskTests(unittest.TestCase):
         web.store.close()
         web.jobs.clear(); web.complete.clear(); web.errors.clear()
 
-    def submit(self, url="https://example.test/live", key=None):
-        return self.client.post("/api/v1/downloads", json={"url": url}, headers={"Idempotency-Key": key} if key else {})
+    def submit(self, url="https://example.test/live", headers=None):
+        return self.client.post("/api/v1/downloads", json={"url": url}, headers=headers)
 
     def create_task(self, **fields):
         data = {"name": "Example", "url": "https://example.test/live", "cron": "*/5 * * * *", "timezone": "UTC", **fields}
@@ -82,30 +82,53 @@ class ApiTaskTests(unittest.TestCase):
         self.wait_for(lambda: not web.scheduler.get(task["id"])["checking"])
         return web.scheduler.get(task["id"])
 
-    def test_parallel_requests_ui_and_completed_idempotency(self):
+    def test_parallel_requests_ui_and_repeated_downloads(self):
         def submit(index):
             client = web.app.test_client()
-            return client.post("/api/v1/downloads", json={"url": f"https://EXAMPLE.test:443/live#view-{index}"}).get_json()
+            return client.post("/api/v1/downloads", json={"url": f"https://EXAMPLE.test:443/live#view-{index}"})
         with ThreadPoolExecutor(max_workers=12) as pool:
             responses = list(pool.map(submit, range(24)))
-        self.assertEqual(sum(item["created"] for item in responses), 1)
-        self.assertEqual(len({item["job"]["id"] for item in responses}), 1)
-        job = responses[0]["job"]
-        self.assertEqual(self.submit(key="retry-key").get_json()["job"]["id"], job["id"])
+        self.assertEqual(sum(response.status_code == 202 for response in responses), 1)
+        self.assertEqual(sum(response.status_code == 200 for response in responses), 23)
+        results = [response.get_json() for response in responses]
+        self.assertEqual(sum(item["created"] for item in results), 1)
+        self.assertEqual(len({item["job"]["id"] for item in results}), 1)
+        job = results[0]["job"]
         self.assertEqual(self.client.post("/", data={"url": job["url"]}).status_code, 302)
         self.assertEqual(len(web.jobs), 1)
         self.finish(job)
-        replay = self.submit(key="retry-key")
-        self.assertEqual(replay.status_code, 200)
-        self.assertEqual(replay.get_json()["job"]["id"], job["id"])
-        self.assertEqual(self.submit("https://example.test/another", key="retry-key").status_code, 409)
+        repeat = self.submit()
+        self.assertEqual(repeat.status_code, 202)
+        self.assertTrue(repeat.get_json()["created"])
+        repeated_job = repeat.get_json()["job"]
+        self.assertNotEqual(repeated_job["id"], job["id"])
+        self.assertEqual(repeat.headers["Location"], repeated_job["status_url"])
+        self.assertNotIn("file", repeated_job)
+        self.assertNotIn("worker", repeated_job)
+        self.finish(repeated_job)
+        self.assertEqual(len(web.complete), 2)
+        self.assertEqual(len({item["file"] for item in web.complete}), 2)
         self.assertEqual(self.client.post(f"/api/v1/downloads/{job['id']}/stop").status_code, 200)
-        with self.client.get(f"/api/v1/downloads/{job['id']}/file") as file:
-            self.assertEqual(file.status_code, 200)
-            self.assertIn(b"controlled test output", file.data)
-        self.assertNotIn("file", replay.get_json()["job"])
-        self.assertNotIn("worker", replay.get_json()["job"])
-        self.assertEqual(self.submit().status_code, 202, "A fresh request may download again after completion")
+        for item in (job, repeated_job):
+            with self.client.get(f"/api/v1/downloads/{item['id']}/file") as response:
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(b"controlled test output", response.data)
+
+    def test_obsolete_request_header_is_ignored(self):
+        headers = {"Idempotency-Key": "old-request"}
+        first = self.submit(headers=headers)
+        self.assertEqual(first.status_code, 202)
+        job = first.get_json()["job"]
+        duplicate = self.submit(headers=headers)
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertFalse(duplicate.get_json()["created"])
+        self.assertEqual(duplicate.get_json()["job"]["id"], job["id"])
+        self.finish(job)
+        repeat = self.submit(headers=headers)
+        self.assertEqual(repeat.status_code, 202)
+        self.assertNotEqual(repeat.get_json()["job"]["id"], job["id"])
+        self.finish(repeat.get_json()["job"])
+        self.assertEqual(self.submit("https://example.test/another", headers=headers).status_code, 202)
 
     def test_url_stays_reserved_through_finalization(self):
         job = self.submit().get_json()["job"]
@@ -240,10 +263,14 @@ class ApiTaskTests(unittest.TestCase):
         self.assertEqual(self.run_task(task)["last_result"], "started")
         self.assertFalse(web.jobs[0]["live_only"])
 
-    def test_restart_preserves_tasks_files_keys_and_recovers_interrupted_jobs(self):
+    def test_restart_preserves_tasks_files_and_allows_repeat_downloads(self):
         task = self.create_task(enabled=False)
-        job = self.submit(key="persisted-request").get_json()["job"]
+        job = self.submit().get_json()["job"]
         self.finish(job)
+        # Old databases can contain request keys; they must not affect downloads.
+        with web.store.connection() as db:
+            db.execute("CREATE TABLE requests (key TEXT PRIMARY KEY, url TEXT NOT NULL, job_id TEXT NOT NULL)")
+            db.execute("INSERT INTO requests VALUES (?, ?, ?)", ("persisted-request", job["url"], job["id"]))
         stale = dict(web.complete[0], id="interrupted-fixture", url="https://example.test/interrupted", status="recording")
         web.store.save_job(stale)
         web.scheduler.stop()
@@ -257,11 +284,16 @@ class ApiTaskTests(unittest.TestCase):
         self.wait_for(lambda: web.scheduler.get(scheduled["id"])["last_result"] == "offline")
         self.assertEqual(web.scheduler.get(task["id"])["last_result"], "never")
         self.assertEqual(web.scheduler.get(task["id"])["url"], task["url"])
-        self.assertEqual(self.submit(key="persisted-request").get_json()["job"]["id"], job["id"])
         self.assertEqual(self.client.get("/api/v1/downloads/interrupted-fixture").get_json()["job"]["status"], "interrupted")
         self.assertFalse(web.jobs)
         with self.client.get(f"/api/v1/downloads/{job['id']}/file") as response:
             self.assertEqual(response.status_code, 200)
+        repeat = self.submit(headers={"Idempotency-Key": "persisted-request"})
+        self.assertEqual(repeat.status_code, 202)
+        self.assertNotEqual(repeat.get_json()["job"]["id"], job["id"])
+        self.finish(repeat.get_json()["job"])
+        self.assertEqual(len(web.complete), 2)
+        self.assertEqual(self.submit(stale["url"]).status_code, 202)
 
     def test_process_ownership_outlives_parent_descriptor(self):
         job = self.submit().get_json()["job"]

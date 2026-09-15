@@ -29,9 +29,6 @@ class StateStore:
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS one_active_url ON jobs(url)
                     WHERE status IN ('starting', 'downloading', 'recording', 'stopping', 'finalizing');
-                CREATE TABLE IF NOT EXISTS requests (
-                    key TEXT PRIMARY KEY, url TEXT NOT NULL, job_id TEXT NOT NULL
-                );
                 CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, data TEXT NOT NULL);
             """)
 
@@ -48,25 +45,12 @@ class StateStore:
     def job_data(job):
         return json.dumps({key: value for key, value in job.items() if key != "worker"})
 
-    def save_job(self, job, *, request_key=None):
+    def save_job(self, job):
         with self.connection() as db:
             db.execute(
                 "INSERT INTO jobs VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET status=excluded.status, data=excluded.data",
                 (job["id"], job["url"], job["status"], self.job_data(job)),
             )
-            if request_key:
-                db.execute("INSERT INTO requests VALUES (?, ?, ?)", (request_key, job["url"], job["id"]))
-
-    def link_request(self, key, job):
-        with self.connection() as db:
-            db.execute("INSERT INTO requests VALUES (?, ?, ?)", (key, job["url"], job["id"]))
-
-    def request_job(self, key):
-        with self.connection() as db:
-            row = db.execute(
-                "SELECT jobs.data FROM requests JOIN jobs ON jobs.id = requests.job_id WHERE requests.key = ?", (key,),
-            ).fetchone()
-        return json.loads(row[0]) if row else None
 
     def load_jobs(self):
         with self.connection() as db:

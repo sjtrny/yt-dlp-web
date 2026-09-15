@@ -32,7 +32,6 @@ Paths below are relative to `/api/v1`. Braces identify path parameters.
 SERVER=http://localhost:8080
 curl -X POST "$SERVER/api/v1/downloads" \
   -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: request-001' \
   -d '{"url":"https://example.com/video"}'
 ```
 
@@ -94,21 +93,15 @@ Different site aliases are not matched by video ID.
 
 ### Duplicate and retry rules
 
-Checks run in this order:
-
-1. If the request key exists, return its original job. A different normalized
-   URL with the same key returns 409.
-2. If the URL is active, return that job. This also applies to jobs from the UI
-   or Tasks. A new request key is stored against that job.
-3. Otherwise, create a job and store the optional request key.
-
-`Idempotency-Key` is optional. It accepts 1–128 ASCII characters. Use one key
-per submission and reuse it for retries. Keys and their job links survive
-completion and restart. A known key returns its original job even if a newer
-job is active for that URL.
-
-Without a known key, a request after the earlier job ends starts a new job.
+Each valid request starts a new download unless the normalized URL is already
+active. An active duplicate is ignored and returns 200 with `created: false`
+and the active job. This also applies to jobs from the UI or Tasks.
 Active URL protection continues until the worker exits, including finalization.
+
+After a job completes, fails, or is interrupted, another request for the same
+URL starts a new job and returns 202 with `created: true`. This also applies
+after a server restart. Each job has a unique output filename. Earlier jobs
+and files are retained, so downloading a completed URL again keeps both copies.
 
 ### Stop
 
@@ -188,7 +181,7 @@ See [Task results](tasks.md#results) and [duplicate rules](tasks.md#duplicate-ru
 | 403 | Cross-site browser write |
 | 404 | Unknown job or Task, or missing completed file |
 | 405 | Wrong HTTP method |
-| 409 | Request key conflict, or Stop unavailable |
+| 409 | Stop unavailable |
 | 413 | Body exceeds 16 KiB |
 | 415 | Wrong content type for a JSON request |
 | 500 | Internal failure; check server logs |

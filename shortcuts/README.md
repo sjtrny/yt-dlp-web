@@ -59,8 +59,5 @@ The generated signed file is ignored by Git.
 ## Retries
 
 Sharing an active URL returns the existing job. Sharing it after completion
-can start another download. The template does not send an `Idempotency-Key`.
-
-For a Shortcut with automatic retries, create one request key per share.
-Reuse it in each retry. Do not use one permanent key for all shares.
+starts another download and keeps both copies.
 See [API retry rules](../docs/api.md#duplicate-and-retry-rules).
