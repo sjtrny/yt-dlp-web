@@ -82,10 +82,11 @@ for all unfinished jobs, including queued jobs, or an exact state such as
 `?status=queued`. There is no pagination.
 
 `YTDLP_MAX_CONCURRENT_DOWNLOADS` sets the shared limit (default 3). Jobs wait
-in `queued` when no download slot is available. The limit includes live streams,
-Tasks, and file finalization. Metadata and playlist discovery have a separate
-bounded capacity and do not consume download slots. On restart, all unfinished
-jobs become `interrupted`. They do not resume automatically.
+in `queued` when no download slot is available. The limit includes live streams
+and file finalization, but downloads started by Tasks do not use or wait for
+these slots. Metadata and playlist discovery have a separate bounded capacity
+and do not consume download slots. On restart, all unfinished jobs become
+`interrupted`. They do not resume automatically.
 
 The Downloads page has X and Clear all controls for completed entries. These
 hide entries from the page only, including after a restart. They do not delete

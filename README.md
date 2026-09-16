@@ -34,7 +34,7 @@ playlist or a separate request continues. Completed and partial files are kept.
 | Variable | Default | Use |
 | --- | --- | --- |
 | `YTDLP_PORT` | `8080` | Web listening port (1–65535); unset or empty uses the default |
-| `YTDLP_MAX_CONCURRENT_DOWNLOADS` | `3` | Maximum active downloads; positive integer; unset or empty uses the default |
+| `YTDLP_MAX_CONCURRENT_DOWNLOADS` | `3` | Maximum active non-Task downloads; positive integer; unset or empty uses the default |
 | `YTDLP_DOWNLOAD_DIR` | `/downloads` | Media |
 | `YTDLP_STATE_DIR` | `<download-dir>/.yt-dlp-web` | History and Tasks |
 | `YTDLP_DEFAULT_TIMEZONE` | `UTC` | Default TZ for new Tasks; IANA time zone |
@@ -44,9 +44,10 @@ For port 9090, use `-e YTDLP_PORT=9090 -p 127.0.0.1:9090:9090` in place of
 the default `-p` option. Open <http://localhost:9090>.
 
 For two active downloads, add `-e YTDLP_MAX_CONCURRENT_DOWNLOADS=2` to the
-Docker command. Videos, playlist entries, scheduled downloads, and live
-recordings share this limit. A slot stays occupied through file finalization.
-Playlist discovery does not use a download slot.
+Docker command. Videos, playlist entries, and live recordings from manual
+requests share this limit. A slot stays occupied through file finalization.
+Downloads started by Tasks do not use or wait for these slots. Playlist
+discovery does not use a download slot.
 
 ## State and restart
 

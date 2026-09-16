@@ -71,18 +71,34 @@ def init_runtime():
                 errors.append((job, job.get("error", "Download interrupted")))
         store = candidate
         scheduler = TaskScheduler(
-            store, lock, submit_download, lambda url: active_download(url, claim=True), probe_live,
+            store, lock, submit_download,
+            lambda url: active_download(url, claim=True, limit_exempt=True), probe_live,
             default_timezone=os.environ.get("YTDLP_DEFAULT_TIMEZONE") or "UTC",
         )
         scheduler.start()
 
 
-def active_download(url, *, claim=False):
+def active_download(url, *, claim=False, limit_exempt=False):
     with lock:
         job = next((job for job in jobs if job["url"] == url), None)
+        changed = False
         if job is not None and claim and not job.get("standalone", True):
             job["standalone"] = True
+            changed = True
+        if job is not None and limit_exempt and not job.get("limit_exempt"):
+            job["limit_exempt"] = True
+            changed = True
+        if job is not None and limit_exempt and job.get("kind") == "playlist":
+            lookup = {item["id"]: item for item in all_jobs()}
+            for entry in job.get("entries", []):
+                child = lookup[entry["id"]]
+                if child["status"] in ACTIVE_STATES and not child.get("limit_exempt"):
+                    child["limit_exempt"] = True
+                    store.save_job(child)
+                    changed = True
+        if changed:
             store.save_job(job)
+            dispatch_downloads()
         return job
 
 
@@ -94,15 +110,17 @@ def find_job(job_id):
         return job
 
 
-def submit_download(url, *, task_id=None, live_only=False, playlist=None, title=None):
+def submit_download(url, *, task_id=None, live_only=False, playlist=None, title=None, limit_exempt=False):
     url = normalize_url(url)
+    limit_exempt = limit_exempt or task_id is not None
     with lock:
-        existing = active_download(url, claim=playlist is None)
+        existing = active_download(url, claim=playlist is None, limit_exempt=limit_exempt)
         if existing:
             return existing, False
         job = {"id": uuid4().hex, "url": url, "title": short_title(title or "Loading…"), "progress": "Queued",
                "kind": "video", "live": False, "stoppable": True, "stopping": False, "status": "queued",
                "created_at": time.time(), "finished_at": None, "task_id": task_id, "live_only": live_only,
+               "limit_exempt": limit_exempt,
                "resolved": bool(playlist or live_only), "standalone": playlist is None,
                "playlist_id": playlist["id"] if playlist else None}
         store.save_job(job)
@@ -136,13 +154,14 @@ def finish_job(job, status, *, error=None, **fields):
 
 def dispatch_downloads():
     """Called under lock; reserve slots before starting any worker threads."""
-    running = sum(job.get("kind") != "playlist" and job.get("resolved") and job["status"] != "queued" for job in jobs)
+    running = sum(job.get("kind") != "playlist" and job.get("resolved") and job["status"] != "queued"
+                  and not job.get("limit_exempt") for job in jobs)
     discovering = sum(not job.get("resolved") and job["status"] != "queued" for job in jobs)
     for job in list(jobs):
         if job["status"] != "queued":
             continue
         discovery = not job.get("resolved")
-        if (discovering if discovery else running) >= max_concurrent_downloads:
+        if (discovering if discovery else running) >= max_concurrent_downloads and (discovery or not job.get("limit_exempt")):
             continue
         job.update(status="discovering" if discovery else "starting",
                    progress="Loading…" if discovery else "Starting…", stoppable=False)
@@ -152,7 +171,7 @@ def dispatch_downloads():
         except Exception as error:
             finish_job(job, "failed", error=str(error))
         else:
-            running += not discovery
+            running += not discovery and not job.get("limit_exempt")
             discovering += discovery
 
 
@@ -200,7 +219,8 @@ def add_playlist_entry(playlist, event):
         lookup = {job["id"]: job for job in all_jobs()}
         if any(lookup[entry["id"]]["url"] == url for entry in playlist["entries"]):
             return
-        child, _ = submit_download(url, task_id=playlist.get("task_id"), playlist=playlist, title=title)
+        child, _ = submit_download(url, task_id=playlist.get("task_id"), playlist=playlist, title=title,
+                                   limit_exempt=playlist.get("limit_exempt", False))
         if child.get("kind") == "playlist":
             raise ValueError("This entry refers to another active playlist, not a video")
     except ValueError as error:

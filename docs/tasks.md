@@ -40,8 +40,9 @@ keep their saved timezone. See [Configuration](../README.md#configuration).
   Playlists produce a group of individual video jobs. Normal download errors
   can still occur.
 
-Downloads use the same queue and `YTDLP_MAX_CONCURRENT_DOWNLOADS` limit as
-manual requests. A Live-mode job checks live status again when its slot opens.
+Downloads appear in the same queue as manual requests, but they do not use or
+wait for `YTDLP_MAX_CONCURRENT_DOWNLOADS` slots. A Live-mode job checks live
+status again immediately before it starts.
 
 An offline or upcoming stream does not start a Live-mode download.
 An extraction failure is an error, not an offline result.
@@ -96,7 +97,7 @@ To stop without a later automatic restart, pause the Task first. Then use
 | `never` | No check yet |
 | `checking` | Check in progress |
 | `offline` | No live stream found |
-| `started` | New download accepted; it may be queued |
+| `started` | New download accepted |
 | `already_running` | Existing active download reused |
 | `error` | Check failed; see `last_error` |
 | `cancelled` | Task changed or scheduler stopped during the check |

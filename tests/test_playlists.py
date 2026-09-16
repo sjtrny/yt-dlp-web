@@ -121,23 +121,49 @@ class PlaylistTests(DownloadTestCase):
         self.assertEqual(self.job(standalone)["status"], "downloading")
         self.assertEqual([job["id"] for job in web.jobs], [standalone["id"]])
 
-    def test_task_and_live_finalization_share_the_limit(self):
+    def test_task_downloads_bypass_the_limit_without_using_slots(self):
         first = self.submit("https://example.test/live-one").get_json()["job"]
         second = self.submit("https://example.test/live-two").get_json()["job"]
         self.wait_for(lambda: all(self.job(job)["can_stop"] for job in (first, second)))
         task = self.create_task(mode="download", url="https://example.test/video-entry-1")
         checked = self.run_task(task)
         self.assertEqual(checked["last_result"], "started")
-        queued = web.find_job(checked["last_job_id"])
-        self.wait_for(lambda: queued["status"] == "queued")
-        self.assertEqual(queued["status"], "queued")
+        task_job = {"id": checked["last_job_id"],
+                    "status_url": f'/api/v1/downloads/{checked["last_job_id"]}'}
+        self.wait_for(lambda: self.job(task_job)["status"] == "downloading")
+        queued = self.video(2)
+        self.wait_for(lambda: web.find_job(queued["id"])["resolved"])
+        self.assertEqual(self.job(queued)["status"], "queued")
         self.assertEqual(self.run_task(task)["last_result"], "already_running")
         self.client.post(first["status_url"] + "/stop")
         self.wait_for(lambda: self.job(first)["status"] == "finalizing")
-        self.assertEqual(queued["status"], "queued")
+        self.assertEqual(self.job(queued)["status"], "queued")
         (self.directory / "release-finalizing").touch()
-        self.wait_for(lambda: queued["status"] == "downloading")
+        self.wait_for(lambda: self.job(queued)["status"] == "downloading")
         self.assertEqual(self.job(second)["status"], "recording")
+        self.assertEqual(self.job(task_job)["status"], "downloading")
+
+    def test_task_reuse_promotes_a_queued_download_past_the_limit(self):
+        live = [self.submit(f"https://example.test/live-{number}").get_json()["job"] for number in (1, 2)]
+        self.wait_for(lambda: all(self.job(job)["can_stop"] for job in live))
+        queued = self.video(1)
+        self.wait_for(lambda: web.find_job(queued["id"])["resolved"])
+        self.assertEqual(self.job(queued)["status"], "queued")
+        task = self.create_task(mode="download", url=queued["url"])
+        checked = self.run_task(task)
+        self.assertEqual(checked["last_result"], "already_running")
+        self.assertEqual(checked["last_job_id"], queued["id"])
+        self.wait_for(lambda: self.job(queued)["status"] == "downloading")
+
+    def test_task_playlist_entries_do_not_use_the_limit(self):
+        task = self.create_task(mode="download", url="https://example.test/playlist")
+        checked = self.run_task(task)
+        self.assertEqual(checked["last_result"], "started")
+        playlist = {"status_url": f'/api/v1/downloads/{checked["last_job_id"]}'}
+        self.wait_for(lambda: self.job(playlist)["kind"] == "playlist")
+        self.wait_for(lambda: self.job(playlist)["discovery_done"])
+        self.wait_for(lambda: self.job(playlist)["counts"]["active"] == 6)
+        self.assertEqual(self.job(playlist)["counts"]["queued"], 0)
 
     def test_task_reuse_keeps_a_playlist_video_running(self):
         playlist = self.playlist()
