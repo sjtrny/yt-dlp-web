@@ -115,9 +115,25 @@ test('server-rendered UI', async () => {
     }
     await playback.close();
 
+    for (const name of ['video-one', 'video-two']) {
+      await page.getByLabel('URL').fill(`https://example.test/${name}`);
+      await page.getByRole('button', {name: 'Download', exact: true}).click();
+    }
+    const firstVideo = page.locator('.job:has(a[href="https://example.test/video-one"])');
+    const secondVideo = page.locator('.job:has(a[href="https://example.test/video-two"])');
+    await firstVideo.getByRole('button', {name: 'Stop'}).click();
+    await page.getByRole('heading', {name: 'Stopped', exact: true}).waitFor();
+    assert.equal(await firstVideo.getByRole('button').count(), 0);
+    assert.equal(await secondVideo.getByRole('button', {name: 'Stop'}).isEnabled(), true);
+    await secondVideo.getByRole('button', {name: 'Stop'}).click();
+    await page.waitForFunction(() => !document.querySelector('form[action^="/stop/"]'));
+    assert.equal(await page.getByRole('heading', {name: 'Failed', exact: true}).count(), 0);
+
     await stop();
     await start();
     await page.reload();
+    await page.getByRole('heading', {name: 'Stopped', exact: true}).waitFor();
+    assert.equal(await page.locator('.job').filter({hasText: 'Controlled video'}).count(), 2);
     await page.getByRole('link', {name: 'Tasks'}).click();
     task = page.locator('section').filter({has: page.getByRole('heading', {name: 'Edited'})});
     await task.waitFor();

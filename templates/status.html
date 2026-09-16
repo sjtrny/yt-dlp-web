@@ -4,13 +4,17 @@
   <a href="{{ job.url }}" target="_blank" rel="noopener">{{ job.title }}</a>
   <div class="job-status">
     <span>{{ job.progress }}</span>
-    {% if job.live %}<form method="post" action="/stop/{{ job.id }}"><button {% if job.stopping or not job.stoppable %}disabled{% endif %}>Stop</button></form>{% endif %}
+    <form method="post" action="/stop/{{ job.id }}"><button {% if job.stopping or not job.stoppable %}disabled{% endif %}>Stop</button></form>
   </div>
 </div>
 {% endfor %}
 {% if complete %}<h2>Complete</h2>{% endif %}
 {% for job in complete %}
 <div class="job"><a href="/download/{{ job.id }}" target="_blank" rel="noopener">{{ job.title }}</a><span>{{ job | download_progress }}</span></div>
+{% endfor %}
+{% if stopped %}<h2>Stopped</h2>{% endif %}
+{% for job in stopped %}
+<div class="job"><a href="{{ job.url }}" target="_blank" rel="noopener">{{ job.title }}</a><span>{{ job.progress }}</span></div>
 {% endfor %}
 {% if errors %}<h2>Failed</h2>{% endif %}
 {% for job, error in errors %}

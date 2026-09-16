@@ -145,6 +145,7 @@ class LiveStopTests(unittest.TestCase):
         with web.lock:
             self.assertFalse(web.jobs, "The preceding check left an active recording")
             web.complete.clear()
+            web.stopped.clear()
             web.errors.clear()
         for name in ("metadata_arrived", "metadata_release", "vod_arrived", "vod_release"):
             getattr(self.server, name).clear()
@@ -280,19 +281,44 @@ class LiveStopTests(unittest.TestCase):
         self.stop(job)
         self.assert_playable(job)
 
-    def test_vod_rejects_stop_without_interrupting_download(self):
+    def test_vod_stop_interrupts_blocked_io_without_completing(self):
         job = self.submit("vod-blocked")
         self.assertTrue(self.server.vod_arrived.wait(15))
         self.workers.add(job["worker"])
-        self.assertEqual(self.client.post(f"/stop/{job['id']}").status_code, 409)
+        worker = job["worker"]
+        self.assertEqual(self.client.post(f"/stop/{job['id']}").status_code, 303)
+        self.wait_until(lambda: job in web.stopped, "Stop did not cancel blocked download", timeout=5)
         with web.lock:
             self.assertFalse(job["live"])
             self.assertFalse(job["stopping"])
-            self.assertIn(job, web.jobs)
+            self.assertNotIn(job, web.jobs)
+            self.assertEqual(job["status"], "stopped")
+            self.assertFalse(web.complete)
+        self.assertIsNotNone(worker.poll())
+        self.assertEqual(self.client.post(f"/stop/{job['id']}").status_code, 303)
+        self.assertEqual(self.client.get(f"/download/{job['id']}").status_code, 404)
         self.assertNotIn(f'/stop/{job["id"]}', self.client.get("/status").get_data(as_text=True))
-        self.server.vod_release.set()
-        self.wait_until(lambda: job in web.complete, "Rejected Stop interrupted an ordinary download")
-        self.assertEqual(Path(job["file"]).read_bytes(), MEDIA)
+
+    def test_vod_stop_reaps_ffmpeg_child_and_retains_partial_media(self):
+        job = self.submit("vod-ffmpeg")
+        self.wait_until(lambda: job.get("stoppable"), "Ordinary FFmpeg download was not stoppable")
+        worker = job["worker"]
+        self.workers.add(worker)
+        child_list = Path(f"/proc/{worker.pid}/task/{worker.pid}/children")
+        self.wait_until(
+            lambda: any(path.stat().st_size > 0 for path in self.output.glob(f"*{job['id']}*.part")),
+            "FFmpeg did not write partial media",
+        )
+        children = child_list.read_text().split()
+        self.assertTrue(children, "No FFmpeg child process was found")
+        self.assertFalse(job["live"])
+        self.assertEqual(self.client.post(f"/api/v1/downloads/{job['id']}/stop").status_code, 202)
+        self.wait_until(lambda: job in web.stopped, "FFmpeg transfer did not stop", timeout=5)
+        self.assertIsNotNone(worker.poll())
+        for pid in children:
+            self.assertFalse(Path(f"/proc/{pid}").exists(), f"Child {pid} was not reaped")
+        self.assertTrue(any(self.output.glob(f"*{job['id']}*.part")))
+        self.assertFalse(web.complete)
 
     def test_task_live_check_records_once_and_api_stop_finalizes(self):
         url = self.base_url + "/fixture/live-task"

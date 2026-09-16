@@ -64,7 +64,7 @@ A 202 response means the job was accepted, not completed. A reused job returns
 IDs and the initial state can differ from the example.
 
 Active states: `starting`, `downloading`, `recording`, `stopping`, `finalizing`.
-Final states: `complete`, `failed`, `interrupted`.
+Final states: `complete`, `stopped`, `failed`, `interrupted`.
 
 `live` is false until metadata identifies a live stream. `can_stop` means Stop
 is available now. `title` has at most 80 characters. `progress` is display text,
@@ -85,10 +85,17 @@ curl -X POST "$SERVER/api/v1/downloads/JOB_ID/stop"
 
 Wait for `can_stop: true` before the first request.
 Stop returns `{"job": {...}}`. Repeat requests after an accepted Stop are safe.
-A finished, failed, or interrupted job returns 200.
+A complete, stopped, failed, or interrupted job returns 200.
 
-Stop returns 409 for an ordinary download, a recorder not yet ready, or natural
-finalization. It does not force-cancel a job. Poll until the job ends.
+For an ordinary download, Stop cancels the transfer and its child processes.
+The job ends as `stopped`, with progress `Stopped` and no download link. Partial
+files are retained. Submit the URL again to start a new download.
+
+For a live recording, Stop lets FFmpeg finish and saves the playable recording
+as `complete`. Other jobs continue in both cases.
+
+Stop returns 409 while a job is not yet ready or is finalizing. A download that
+finishes as Stop is requested can still end as `complete`. Poll until the job ends.
 
 ## Tasks
 

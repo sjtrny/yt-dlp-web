@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -29,7 +30,10 @@ if sys.argv[1] == "--probe":
     emit("probe", live="offline" not in url and "upcoming" not in url)
 else:
     url, directory, job_id = sys.argv[1:4]
-    emit("metadata", title="Controlled recording", live=True)
+    ordinary = "/video" in url
+    if "/video-blocked" in url:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    emit("metadata", title="Controlled video" if ordinary else "Controlled recording", live=not ordinary)
     emit("recording", stoppable=True)
     for line in sys.stdin:
         if json.loads(line).get("action") == "stop":
