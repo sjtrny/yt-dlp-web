@@ -5,10 +5,7 @@ Web UI for yt-dlp.
 ## Run
 
 ```sh
-mkdir -p downloads
-docker run --name yt-dlp-web --rm --pull=always -p 127.0.0.1:8080:8080 \
-  --mount "type=bind,src=$(pwd)/downloads,dst=/downloads" \
-  ghcr.io/sjtrny/yt-dlp-web:latest
+docker run -p 127.0.0.1:8080:8080 -v ./downloads:/downloads ghcr.io/sjtrny/yt-dlp-web
 ```
 
 Open <http://localhost:8080>.
@@ -27,10 +24,6 @@ Open <http://localhost:8080>.
 | `YTDLP_STATE_DIR` | `<download-dir>/.yt-dlp-web` | History and Tasks |
 | `YTDLP_DEFAULT_TIMEZONE` | `UTC` | Default TZ for new Tasks; IANA time zone |
 | `YTDLP_OVERRIDE_DIR` | Unset | Custom yt-dlp package |
-
-Add `--env YTDLP_DEFAULT_TIMEZONE=Australia/Sydney` to `docker run` to pre-fill
-the Task **TZ** field. It also applies to new API Tasks that omit `timezone`.
-Each Task can use a different timezone. Existing Tasks keep their saved value.
 
 ### Overrides
 
