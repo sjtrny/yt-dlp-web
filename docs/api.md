@@ -1,15 +1,14 @@
 # HTTP API v1
 
-Base path: `/api/v1`. Send JSON objects with `Content-Type: application/json`.
-The request body limit is 16 KiB. Unknown fields return 400.
+Base path: `/api/v1`.
 
-Cross-site browser writes are rejected.
+Send JSON objects with `Content-Type: application/json`. The request body limit is 16 KiB.
 
 Examples use `SERVER=http://localhost:8080`.
 
 ## Routes
 
-Paths below are relative to `/api/v1`. Braces identify path parameters.
+Paths below are relative to base path.
 
 | Method | Path | Success response |
 | --- | --- | --- |
@@ -35,8 +34,7 @@ curl -X POST "$SERVER/api/v1/downloads" \
   -d '{"url":"https://example.com/video"}'
 ```
 
-`url` is required. No other body fields are accepted. The API has no per-request
-yt-dlp options, output paths, or backend selection.
+`url` is required.
 
 Example response:
 
@@ -65,12 +63,6 @@ A 202 response means the job was accepted, not completed. A reused job returns
 200 with `created: false`. Both responses set `Location` to `job.status_url`.
 IDs and the initial state can differ from the example.
 
-Poll `status_url` with GET. When `status` is `complete`, get `download_url`.
-Both URLs are relative to the server. `download_url` is null before completion.
-`error` is null unless the job failed or was interrupted. `task_id` identifies
-the Task that created the job, or is null. A reused job keeps its original ID
-and Task link.
-
 Active states: `starting`, `downloading`, `recording`, `stopping`, `finalizing`.
 Final states: `complete`, `failed`, `interrupted`.
 
@@ -81,35 +73,13 @@ not a number. Times are UTC ISO 8601 strings. `finished_at` is null while active
 GET `/downloads` lists jobs by creation time, newest first. Use `?status=active`
 or an exact state to filter the list. There is no pagination.
 
-### URL rules
-
-Accepts HTTP and HTTPS only, with no embedded credentials. The URL has at most
-4096 characters after trimming. Spaces and control characters are not accepted.
-
-Normalization removes surrounding spaces, fragments, and default ports.
-It converts scheme and host to lowercase, converts Unicode host names to IDNA,
-and adds `/` to an empty path. Paths and query strings are preserved.
-Different site aliases are not matched by video ID.
-
-### Duplicate and retry rules
-
-Each valid request starts a new download unless the normalized URL is already
-active. An active duplicate is ignored and returns 200 with `created: false`
-and the active job. This also applies to jobs from the UI or Tasks.
-Active URL protection continues until the worker exits, including finalization.
-
-After a job completes, fails, or is interrupted, another request for the same
-URL starts a new job and returns 202 with `created: true`. This also applies
-after a server restart. Each job has a unique output filename. Earlier jobs
-and files are retained, so downloading a completed URL again keeps both copies.
-
 ### Stop
 
 ```sh
 curl -X POST "$SERVER/api/v1/downloads/JOB_ID/stop"
 ```
 
-No body is required. Wait for `can_stop: true` before the first request.
+Wait for `can_stop: true` before the first request.
 Stop returns `{"job": {...}}`. Repeat requests after an accepted Stop are safe.
 A finished, failed, or interrupted job returns 200.
 
