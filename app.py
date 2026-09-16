@@ -52,7 +52,10 @@ def init_runtime():
             else:
                 errors.append((job, job.get("error", "Download interrupted")))
         store = candidate
-        scheduler = TaskScheduler(store, lock, submit_download, active_download, probe_live)
+        scheduler = TaskScheduler(
+            store, lock, submit_download, active_download, probe_live,
+            default_timezone=os.environ.get("YTDLP_DEFAULT_TIMEZONE") or "UTC",
+        )
         scheduler.start()
 
 
@@ -406,7 +409,7 @@ def tasks_page():
     tasks = [task_json(task) for task in scheduler.list()]
     return render_template(
         "tasks.html", tasks=tasks, checking=any(task["checking"] for task in tasks),
-        new_task={"name": "", "url": "", "cron": "*/5 * * * *", "timezone": "UTC",
+        new_task={"name": "", "url": "", "cron": "*/5 * * * *", "timezone": scheduler.default_timezone,
                   "mode": "live", "enabled": True},
     )
 

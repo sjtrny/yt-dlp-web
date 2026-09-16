@@ -23,9 +23,13 @@ It also works on a disabled Task and does not change the next scheduled time.
 | Name | `name` | URL, up to 120 characters | Display name; 120 characters maximum |
 | URL | `url` | Required | Video or live-stream page |
 | CRON | `cron` | `*/5 * * * *` | Five-field schedule |
-| TZ | `timezone` | `UTC` | IANA time zone, such as `Australia/Sydney` |
+| TZ | `timezone` | `YTDLP_DEFAULT_TIMEZONE`, or `UTC` | IANA time zone, such as `Australia/Sydney` |
 | Mode | `mode` | `live` | Live: `live`; Always: `download` |
 | Enabled | `enabled` | `true` | JSON boolean; false disables automatic checks |
+
+Set `YTDLP_DEFAULT_TIMEZONE` before starting the app to pre-fill **TZ** for new
+Tasks. It also applies when an API request omits `timezone`. Existing Tasks
+keep their saved timezone. See [Configuration](../README.md#configuration).
 
 ### Modes
 

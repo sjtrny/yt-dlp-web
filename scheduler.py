@@ -50,9 +50,10 @@ def next_run(cron, timezone, after):
 
 
 class TaskScheduler:
-    def __init__(self, store, lock, submit, active, probe):
+    def __init__(self, store, lock, submit, active, probe, *, default_timezone="UTC"):
         self.store, self.lock = store, lock
         self.submit, self.active, self.probe = submit, active, probe
+        self.default_timezone = default_timezone
         self.tasks = store.load_tasks()
         self.checking = set()
         self.stop_event = Event()
@@ -82,7 +83,7 @@ class TaskScheduler:
             now = time.time()
             task = dict(self.tasks[task_id]) if task_id else {
                 "id": uuid4().hex, "name": "", "url": "", "cron": "*/5 * * * *",
-                "timezone": "UTC", "mode": "live", "enabled": True, "created_at": now,
+                "timezone": self.default_timezone, "mode": "live", "enabled": True, "created_at": now,
                 "last_checked_at": None, "last_result": "never", "last_error": None,
                 "last_job_id": None, "revision": 0,
             }

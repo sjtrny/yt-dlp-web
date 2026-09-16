@@ -9,6 +9,7 @@ const { chromium } = require('playwright');
 
 const root = path.resolve(__dirname, '..');
 const python = process.env.PYTHON || path.join(root, '.venv/bin/python');
+const defaultTimezone = process.env.YTDLP_DEFAULT_TIMEZONE || 'UTC';
 
 test('server-rendered UI', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'yt-dlp-web-ui-'));
@@ -55,12 +56,23 @@ test('server-rendered UI', async () => {
     assert.deepEqual(await page.locator('nav a').allTextContents(), ['Downloads', 'Tasks']);
 
     let form = page.locator('section').filter({has: page.getByRole('heading', {name: 'New'})});
+    assert.equal(await form.getByLabel('TZ', {exact: true}).inputValue(), defaultTimezone);
+    const apiTaskResponse = await fetch(`${url}/api/v1/tasks`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url: 'https://example.test/api-default', enabled: false}),
+    });
+    assert.equal(apiTaskResponse.status, 201);
+    const {task: apiTask} = await apiTaskResponse.json();
+    assert.equal(apiTask.timezone, defaultTimezone);
+    assert.equal((await fetch(`${url}/api/v1/tasks/${apiTask.id}`, {method: 'DELETE'})).status, 204);
     await form.getByLabel('Name').fill('Watcher');
     await form.getByLabel('URL').fill('https://example.test/offline');
     await form.getByRole('button', {name: 'Add'}).click();
 
     let task = page.locator('section').filter({has: page.getByRole('heading', {name: 'Watcher'})});
+    assert.equal(await task.getByLabel('TZ', {exact: true}).inputValue(), defaultTimezone);
     await task.getByLabel('Name').fill('Edited');
+    await task.getByLabel('TZ', {exact: true}).fill('Europe/London');
     await task.getByLabel('Enabled').uncheck();
     await task.getByRole('button', {name: 'Save'}).click();
     task = page.locator('section').filter({has: page.getByRole('heading', {name: 'Edited'})});
@@ -84,6 +96,8 @@ test('server-rendered UI', async () => {
     task = page.locator('section').filter({has: page.getByRole('heading', {name: 'Edited'})});
     await task.waitFor();
     assert.equal(await task.getByLabel('Enabled').isChecked(), false);
+    assert.equal(await task.getByLabel('TZ', {exact: true}).inputValue(), 'Europe/London');
+    assert.equal(await form.getByLabel('TZ', {exact: true}).inputValue(), defaultTimezone);
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     if (process.env.YTDLP_BROWSER_ARTIFACT_DIR) {
