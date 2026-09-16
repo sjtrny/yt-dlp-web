@@ -17,7 +17,11 @@ label.check input { width: auto; margin: 0; }
 .task > div { grid-column: 1 / -1; }
 .job { margin: .5rem 0; }
 .job > a { min-width: 0; overflow-wrap: anywhere; }
+.job > form { flex-shrink: 0; }
 .job-status { display: flex; align-items: center; gap: .5rem; flex-shrink: 0; }
+.job-message { min-width: 0; flex: 1; }
+.job-message > a { overflow-wrap: anywhere; }
+.job-message pre { margin: .25rem 0 0; }
 .playlist { border: 1px solid #8888; border-radius: .4rem; padding: .75rem; }
 .playlist-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
 .playlist-heading h3 { margin: 0; font-size: 1rem; min-width: 0; overflow-wrap: anywhere; }

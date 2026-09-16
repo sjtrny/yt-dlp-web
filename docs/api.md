@@ -88,9 +88,10 @@ these slots. Metadata and playlist discovery have a separate bounded capacity
 and do not consume download slots. On restart, all unfinished jobs become
 `interrupted`. They do not resume automatically.
 
-The Downloads page has X and Clear all controls for completed entries. These
-hide entries from the page only, including after a restart. They do not delete
-files or API history. Existing playback and API file links still work.
+The Downloads page has X and Clear all controls for Complete, Stopped, and
+Failed entries. These hide entries from the page only, including after a
+restart. They do not delete full or partial files, playlist records, or API
+history. Existing playback and API file links still work.
 
 ### Playlists
 
@@ -118,7 +119,7 @@ playlist's `entries` to find all members. A playlist finishes after discovery
 ends and its videos finish. Any failed video makes the playlist `failed`;
 otherwise a cancelled video makes it `stopped`, unless Stop already set that
 outcome. Completed video links remain available in all cases. Hiding a
-completed video does not change playlist counts.
+finished video from the Downloads page does not change playlist counts.
 
 ### URL rules
 

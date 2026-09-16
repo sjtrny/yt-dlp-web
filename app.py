@@ -573,25 +573,48 @@ def status_context():
     ungrouped = [job for job in jobs if job.get("kind") != "playlist" and job["id"] not in grouped]
     return dict(jobs=[job for job in ungrouped if job["status"] != "queued"],
                 queued=[job for job in ungrouped if job["status"] == "queued"], playlists=playlists,
-                complete=[job for job in complete if job.get("kind") != "playlist"],
-                stopped=stopped, errors=errors)
+                complete=[job for job in complete if job.get("kind") != "playlist" and not job.get("hidden")],
+                stopped=[job for job in stopped if not job.get("hidden")],
+                errors=[item for item in errors if not item[0].get("hidden")])
+
+
+def hide_finished(section, job_id=None):
+    with lock:
+        if section == "complete":
+            section_jobs, states = complete, {"complete"}
+        elif section == "stopped":
+            section_jobs, states = stopped, {"stopped"}
+        else:
+            section_jobs, states = [job for job, _ in errors], {"failed", "interrupted"}
+        if job_id is not None:
+            job = find_job(job_id)
+            if job["status"] not in states:
+                abort(409, f"Only downloads in {section.title()} can be removed from this list")
+            selected = [job]
+        else:
+            selected = [job for job in section_jobs if not job.get("hidden")]
+        store.hide_jobs(selected)
+        for job in selected:
+            job["hidden"] = True
+    return redirect("/", code=303)
 
 
 @app.post("/completed/clear")
 @app.post("/completed/<job_id>/remove")
 def clear_completed(job_id=None):
-    with lock:
-        if job_id is not None:
-            job = find_job(job_id)
-            if job["status"] != "complete":
-                abort(409, "Only completed downloads can be removed from this list")
-            selected = [job]
-        else:
-            selected = [job for job in complete if not job.get("hidden")]
-        store.hide_completed(selected)
-        for job in selected:
-            job["hidden"] = True
-    return redirect("/", code=303)
+    return hide_finished("complete", job_id)
+
+
+@app.post("/stopped/clear")
+@app.post("/stopped/<job_id>/remove")
+def clear_stopped(job_id=None):
+    return hide_finished("stopped", job_id)
+
+
+@app.post("/failed/clear")
+@app.post("/failed/<job_id>/remove")
+def clear_failed(job_id=None):
+    return hide_finished("failed", job_id)
 
 
 @app.get("/download/<job_id>")

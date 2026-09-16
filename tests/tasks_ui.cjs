@@ -148,10 +148,42 @@ test('server-rendered UI', async () => {
     assert.equal(await secondVideo.getByRole('button', {name: 'Stop'}).isEnabled(), true);
     await firstVideo.getByRole('button', {name: 'Stop'}).click();
     await page.getByRole('heading', {name: 'Stopped', exact: true}).waitFor();
-    assert.equal(await firstVideo.getByRole('button').count(), 0);
+    assert.equal(await firstVideo.getByRole('button', {name: 'Remove Controlled video from stopped list'}).count(), 1);
     assert.equal(await secondVideo.getByRole('button', {name: 'Stop'}).isEnabled(), true);
     await secondVideo.getByRole('button', {name: 'Stop'}).click();
     await page.waitForFunction(() => !document.querySelector('form[action^="/stop/"]'));
+    const stoppedActions = page.locator('.actions').filter({has: page.getByRole('heading', {name: 'Stopped', exact: true})});
+    assert.equal(await stoppedActions.getByRole('button', {name: 'Clear all', exact: true}).count(), 1);
+    assert.equal(await page.getByRole('button', {name: 'Remove Controlled video from stopped list'}).count(), 2);
+
+    for (const name of ['video-error-one', 'video-error-two']) {
+      await page.getByLabel('URL').fill(`https://example.test/${name}`);
+      await page.getByRole('button', {name: 'Download', exact: true}).click();
+    }
+    const firstFailure = page.locator('.job.error').filter({has: page.locator('a[href="https://example.test/video-error-one"]')});
+    const secondFailure = page.locator('.job.error').filter({has: page.locator('a[href="https://example.test/video-error-two"]')});
+    await page.waitForFunction(() => document.querySelectorAll('form[action^="/failed/"][action$="/remove"]').length === 2);
+    const failedActions = page.locator('.actions').filter({has: page.getByRole('heading', {name: 'Failed', exact: true})});
+    assert.equal(await failedActions.getByRole('button', {name: 'Clear all', exact: true}).count(), 1);
+    assert.equal(await page.getByRole('button', {name: 'Remove Controlled video from failed list'}).count(), 2);
+    const partialFiles = new Map(fs.readdirSync(directory).filter(name => name.endsWith('.part'))
+      .map(name => [name, fs.readFileSync(path.join(directory, name))]));
+    assert.equal(partialFiles.size, 2);
+    for (const width of [1000, 390]) {
+      await page.setViewportSize({width, height: 900});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      if (process.env.YTDLP_BROWSER_ARTIFACT_DIR) {
+        await page.screenshot({path: path.join(process.env.YTDLP_BROWSER_ARTIFACT_DIR, `finished-${width}.png`), fullPage: true});
+      }
+    }
+
+    await firstVideo.getByRole('button', {name: 'Remove Controlled video from stopped list'}).click();
+    assert.equal(await page.getByRole('button', {name: 'Remove Controlled video from stopped list'}).count(), 1);
+    await stoppedActions.getByRole('button', {name: 'Clear all', exact: true}).click();
+    assert.equal(await page.getByRole('heading', {name: 'Stopped', exact: true}).count(), 0);
+    await firstFailure.getByRole('button', {name: 'Remove Controlled video from failed list'}).click();
+    assert.equal(await secondFailure.getByRole('button', {name: 'Remove Controlled video from failed list'}).count(), 1);
+    await failedActions.getByRole('button', {name: 'Clear all', exact: true}).click();
     assert.equal(await page.getByRole('heading', {name: 'Failed', exact: true}).count(), 0);
 
     await stop();
@@ -166,8 +198,11 @@ test('server-rendered UI', async () => {
       assert.equal(response.status, 200);
       assert.deepEqual(Buffer.from(await response.arrayBuffer()), fs.readFileSync(media));
     }
-    await page.getByRole('heading', {name: 'Stopped', exact: true}).waitFor();
-    assert.equal(await page.locator('.job').filter({hasText: 'Controlled video'}).count(), 2);
+    for (const [name, content] of partialFiles) {
+      assert.deepEqual(fs.readFileSync(path.join(directory, name)), content);
+    }
+    assert.equal(await page.getByRole('heading', {name: 'Stopped', exact: true}).count(), 0);
+    assert.equal(await page.getByRole('heading', {name: 'Failed', exact: true}).count(), 0);
     await page.getByRole('link', {name: 'Tasks'}).click();
     task = page.locator('section').filter({has: page.getByRole('heading', {name: 'Edited'})});
     await task.waitFor();

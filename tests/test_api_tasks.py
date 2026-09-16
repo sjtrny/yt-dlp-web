@@ -273,6 +273,88 @@ class ApiTaskTests(DownloadTestCase):
             self.assertEqual(path.read_bytes(), contents)
             self.assertEqual(path.stat().st_mtime_ns, modified)
 
+    def test_clear_stopped_and_failed_keeps_partials_history_and_new_results(self):
+        stopped_jobs = []
+        for number in (1, 2):
+            job = self.submit(f"https://example.test/video-entry-{number}").get_json()["job"]
+            self.wait_for(lambda job=job: web.find_job(job["id"]).get("stoppable"))
+            self.assertEqual(self.client.post(job["status_url"] + "/stop").status_code, 202)
+            self.wait_for(lambda job=job: web.find_job(job["id"])["status"] == "stopped")
+            stopped_jobs.append(job)
+        failed_jobs = []
+        for suffix in ("one", "two"):
+            job = self.submit(f"https://example.test/video-error-{suffix}").get_json()["job"]
+            self.wait_for(lambda job=job: web.find_job(job["id"])["status"] == "failed")
+            failed_jobs.append(job)
+        now = time.time()
+        interrupted = dict(id="interrupted-result", url="https://example.test/interrupted-result",
+                           title="Interrupted video", progress="Interrupted", kind="video", live=False,
+                           status="interrupted", stoppable=False, stopping=False, created_at=now, finished_at=now,
+                           task_id=None, playlist_id=None, error="The application stopped during this download")
+        web.store.save_job(interrupted)
+        web.errors.insert(0, (interrupted, interrupted["error"]))
+        failed_jobs.append(interrupted)
+        partials = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in self.directory.glob("*.part")}
+        self.assertEqual(len(partials), 4)
+
+        sections = {"stopped": stopped_jobs, "failed": failed_jobs}
+        for section, section_jobs in sections.items():
+            clear = f"/{section}/clear"
+            remove = f'/{section}/{section_jobs[0]["id"]}/remove'
+            self.assertEqual(self.client.get(clear).status_code, 405)
+            self.assertEqual(self.client.get(remove).status_code, 405)
+            self.assertEqual(self.client.post(f"/{section}/unknown/remove").status_code, 404)
+            for route in (clear, remove):
+                self.assertEqual(self.client.post(route, headers={"Origin": "https://other.test"}).status_code, 403)
+            page = self.client.get("/status").get_data(as_text=True)
+            self.assertIn(f'action="{clear}"', page)
+            for job in section_jobs:
+                self.assertIn(f'action="/{section}/{job["id"]}/remove"', page)
+            for _ in range(2):
+                self.assertEqual(self.client.post(remove).status_code, 303)
+            page = self.client.get("/status").get_data(as_text=True)
+            self.assertNotIn(f'action="/{section}/{section_jobs[0]["id"]}/remove"', page)
+            self.assertIn(f'action="/{section}/{section_jobs[1]["id"]}/remove"', page)
+            for _ in range(2):
+                self.assertEqual(self.client.post(clear).status_code, 303)
+            page = self.client.get("/status").get_data(as_text=True)
+            self.assertNotIn(f"<h2>{section.title()}</h2>", page)
+            self.assertNotIn(f'action="{clear}"', page)
+            for job in section_jobs:
+                status = self.client.get(f'/api/v1/downloads/{job["id"]}').get_json()["job"]["status"]
+                self.assertIn(status, {"failed", "interrupted"} if section == "failed" else {section})
+
+        self.assertEqual(self.client.post(f'/stopped/{failed_jobs[0]["id"]}/remove').status_code, 409)
+        self.assertEqual(self.client.post(f'/failed/{stopped_jobs[0]["id"]}/remove').status_code, 409)
+
+        new_stopped = self.submit("https://example.test/video-entry-3").get_json()["job"]
+        self.wait_for(lambda: web.find_job(new_stopped["id"]).get("stoppable"))
+        self.client.post(new_stopped["status_url"] + "/stop")
+        self.wait_for(lambda: web.find_job(new_stopped["id"])["status"] == "stopped")
+        new_failed = self.submit("https://example.test/video-error-new").get_json()["job"]
+        self.wait_for(lambda: web.find_job(new_failed["id"])["status"] == "failed")
+        page = self.client.get("/status").get_data(as_text=True)
+        self.assertIn(f'action="/stopped/{new_stopped["id"]}/remove"', page)
+        self.assertIn(f'action="/failed/{new_failed["id"]}/remove"', page)
+
+        web.scheduler.stop()
+        web.store.close()
+        web.store = None; web.scheduler = None
+        web.complete.clear(); web.stopped.clear(); web.errors.clear()
+        web.init_runtime()
+        page = self.client.get("/").get_data(as_text=True)
+        for section, section_jobs in sections.items():
+            for job in section_jobs:
+                self.assertNotIn(f'action="/{section}/{job["id"]}/remove"', page)
+        self.assertIn(f'action="/stopped/{new_stopped["id"]}/remove"', page)
+        self.assertIn(f'action="/failed/{new_failed["id"]}/remove"', page)
+        self.assertEqual(len(self.client.get("/api/v1/downloads?status=stopped").get_json()["jobs"]), 3)
+        self.assertEqual(len(self.client.get("/api/v1/downloads?status=failed").get_json()["jobs"]), 3)
+        self.assertEqual(len(self.client.get("/api/v1/downloads?status=interrupted").get_json()["jobs"]), 1)
+        for path, (contents, modified) in partials.items():
+            self.assertEqual(path.read_bytes(), contents)
+            self.assertEqual(path.stat().st_mtime_ns, modified)
+
     def test_server_rendered_task_forms(self):
         response = self.client.post("/tasks", data={
             "name": "HTML task", "url": "https://example.test/offline", "cron": "*/5 * * * *",

@@ -30,14 +30,13 @@
 {% for job in queued %}
 {{ active_job(job) }}
 {% endfor %}
-{% set visible_complete = complete | rejectattr("hidden") | list %}
-{% if visible_complete %}
+{% if complete %}
 <div class="actions">
   <h2>Complete</h2>
   <form method="post" action="/completed/clear"><button title="Clear this list; keep files">Clear all</button></form>
 </div>
 {% endif %}
-{% for job in visible_complete %}
+{% for job in complete %}
 <div class="job">
   <a href="/download/{{ job.id }}" target="_blank" rel="noopener">{{ job.title }}</a>
   <div class="job-status">
@@ -46,11 +45,30 @@
   </div>
 </div>
 {% endfor %}
-{% if stopped %}<h2>Stopped</h2>{% endif %}
+{% if stopped %}
+<div class="actions">
+  <h2>Stopped</h2>
+  <form method="post" action="/stopped/clear"><button title="Clear this list; keep files">Clear all</button></form>
+</div>
+{% endif %}
 {% for job in stopped %}
-<div class="job"><a href="{{ job.url }}" target="_blank" rel="noopener">{{ job.title }}</a><span>{{ job.progress }}</span></div>
+<div class="job">
+  <a href="{{ job.url }}" target="_blank" rel="noopener">{{ job.title }}</a>
+  <div class="job-status">
+    <span>{{ job.progress }}</span>
+    <form method="post" action="/stopped/{{ job.id }}/remove"><button aria-label="Remove {{ job.title }} from stopped list" title="Remove from list; keep files">X</button></form>
+  </div>
+</div>
 {% endfor %}
-{% if errors %}<h2>Failed</h2>{% endif %}
+{% if errors %}
+<div class="actions">
+  <h2>Failed</h2>
+  <form method="post" action="/failed/clear"><button title="Clear this list; keep files">Clear all</button></form>
+</div>
+{% endif %}
 {% for job, error in errors %}
-<div class="error"><a href="{{ job.url }}" target="_blank" rel="noopener">{{ job.title }}</a><pre>{{ error }}</pre></div>
+<div class="job error">
+  <div class="job-message"><a href="{{ job.url }}" target="_blank" rel="noopener">{{ job.title }}</a><pre>{{ error }}</pre></div>
+  <form method="post" action="/failed/{{ job.id }}/remove"><button aria-label="Remove {{ job.title }} from failed list" title="Remove from list; keep files">X</button></form>
+</div>
 {% endfor %}
