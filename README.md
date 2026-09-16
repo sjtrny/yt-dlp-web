@@ -22,7 +22,8 @@ Each finished video has its own playback link.
 **Cancel** removes a queued video from the queue. **Stop playlist** stops its
 downloads and cancels its queued videos. A video shared with another active
 playlist or a separate request continues. Completed and partial files are kept.
-**X** and **Clear all** hide completed entries without deleting files.
+**X** and **Clear all** hide completed, stopped, or failed entries without
+deleting full or partial files.
 
 ## Documentation
 

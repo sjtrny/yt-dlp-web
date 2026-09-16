@@ -55,6 +55,10 @@ else:
     if "--discover" in sys.argv[4:]:
         sys.exit(0)
     emit("recording", stoppable=True)
+    if "/video-error" in url:
+        (Path(directory) / f"{job_id}.part").write_bytes(b"failed partial media")
+        emit("error", error="Controlled download failure")
+        sys.exit(1)
     if entry:
         (barriers / f"started-{entry}").touch()
         (Path(directory) / f"{job_id}.part").write_bytes(b"partial media")
