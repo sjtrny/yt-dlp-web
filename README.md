@@ -2,7 +2,7 @@
 
 Web UI for yt-dlp.
 
-![Browser window showing Me at the zoo partially downloaded in yt-dlp-web](docs/images/download-in-progress.png)
+![Browser window showing active and completed downloads with Stop, X, and Clear all controls](docs/images/download-in-progress.png)
 
 ## Run
 
