@@ -2,6 +2,8 @@
 
 Web UI for yt-dlp.
 
+![Main page with Me at the zoo partially downloaded](docs/images/download-in-progress.png)
+
 ## Run
 
 ```sh
