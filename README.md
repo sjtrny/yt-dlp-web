@@ -16,7 +16,6 @@ Open <http://localhost:8080>.
 
 - [Tasks](docs/tasks.md)
 - [API](docs/api.md)
-- [iOS Shortcut](shortcuts/README.md)
 
 ## Configuration
 

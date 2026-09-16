@@ -182,7 +182,6 @@ test('server-rendered UI', async () => {
     }
     await task.getByRole('button', {name: 'Delete'}).click();
     assert.equal(await page.getByRole('heading', {name: 'Edited'}).count(), 0);
-    assert.equal((await page.goto(`${url}/shortcut`)).status(), 404);
     assert.deepEqual(errors, []);
   } finally {
     if (browser) await browser.close();

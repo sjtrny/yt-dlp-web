@@ -279,7 +279,6 @@ class ApiTaskTests(unittest.TestCase):
         self.assertIn("HTML task", page)
         self.assertIn(f'/tasks/{task["id"]}/save', page)
         self.assertNotIn("<script", page)
-        self.assertNotIn("iOS Shortcut", page)
         self.assertNotIn("Check a page on a schedule", page)
         self.assertEqual(self.client.get("/static/tasks.js").status_code, 404)
 

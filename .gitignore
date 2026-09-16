@@ -17,5 +17,3 @@ dist/
 *.log
 compose.override.yml
 compose.override.yaml
-/shortcuts/*.shortcut
-!/shortcuts/*.unsigned.shortcut
