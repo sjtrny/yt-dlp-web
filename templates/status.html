@@ -8,9 +8,21 @@
   </div>
 </div>
 {% endfor %}
-{% if complete %}<h2>Complete</h2>{% endif %}
-{% for job in complete %}
-<div class="job"><a href="/download/{{ job.id }}" target="_blank" rel="noopener">{{ job.title }}</a><span>{{ job | download_progress }}</span></div>
+{% set visible_complete = complete | rejectattr("hidden") | list %}
+{% if visible_complete %}
+<div class="actions">
+  <h2>Complete</h2>
+  <form method="post" action="/completed/clear"><button title="Clear this list; keep files">Clear all</button></form>
+</div>
+{% endif %}
+{% for job in visible_complete %}
+<div class="job">
+  <a href="/download/{{ job.id }}" target="_blank" rel="noopener">{{ job.title }}</a>
+  <div class="job-status">
+    <span>{{ job | download_progress }}</span>
+    <form method="post" action="/completed/{{ job.id }}/remove"><button aria-label="Remove {{ job.title }} from completed list" title="Remove from list; keep file">X</button></form>
+  </div>
+</div>
 {% endfor %}
 {% if stopped %}<h2>Stopped</h2>{% endif %}
 {% for job in stopped %}
