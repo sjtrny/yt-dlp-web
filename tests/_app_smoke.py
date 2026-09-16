@@ -26,6 +26,7 @@ def audio_fixture():
 
 
 MEDIA = audio_fixture()
+SECOND_MEDIA = MEDIA[:-2] + b"\x01\x00"
 
 
 class MediaHandler(BaseHTTPRequestHandler):
@@ -33,7 +34,7 @@ class MediaHandler(BaseHTTPRequestHandler):
         if self.path == "/media/failure.wav":
             self.send_error(404, "Fixture media does not exist")
             return
-        if self.path.startswith("/media/parallel-"):
+        if self.path.startswith(("/media/parallel-", "/media/collision-")):
             with self.server.arrivals_lock:
                 self.server.arrivals += 1
                 if self.server.arrivals == 2:
@@ -42,10 +43,11 @@ class MediaHandler(BaseHTTPRequestHandler):
                 self.send_error(503, "Concurrent downloads did not arrive")
                 return
         self.send_response(200)
+        media = SECOND_MEDIA if self.path == "/media/collision-two.wav" else MEDIA
         self.send_header("Content-Type", "audio/wav")
-        self.send_header("Content-Length", str(len(MEDIA)))
+        self.send_header("Content-Length", str(len(media)))
         self.end_headers()
-        self.wfile.write(MEDIA)
+        self.wfile.write(media)
 
     def log_message(self, *args):
         pass
@@ -82,6 +84,9 @@ class AppSmokeTests(unittest.TestCase):
             self.assertFalse(web.jobs, "Previous jobs must finish before the next check")
             web.complete.clear()
             web.errors.clear()
+        self.server.arrivals = 0
+        self.server.both_arrived.clear()
+        self.server.release.clear()
         self.client = web.app.test_client()
 
     def submit(self, path):
@@ -99,12 +104,20 @@ class AppSmokeTests(unittest.TestCase):
             time.sleep(0.025)
         self.fail("Local fixture download did not finish within 20 seconds")
 
-    def assert_served(self, job):
+    def assert_served(self, job, media=MEDIA):
         self.assertEqual(job["progress"], "100%")
         self.assertTrue(Path(job["file"]).is_relative_to(self.output.name))
         with self.client.get(f"/download/{job['id']}") as response:
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.data, MEDIA)
+            self.assertEqual(response.data, media)
+            self.assertIn("inline;", response.headers["Content-Disposition"])
+        with self.client.get(f"/download/{job['id']}", headers={"Range": "bytes=10-29"}) as response:
+            self.assertEqual(response.status_code, 206)
+            self.assertEqual(response.data, media[10:30])
+            self.assertEqual(response.headers["Content-Range"], f"bytes 10-29/{len(media)}")
+        with self.client.get(f"/api/v1/downloads/{job['id']}/file") as response:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.data, media)
             self.assertIn("attachment;", response.headers["Content-Disposition"])
 
     def test_direct_ordinary_download_and_file_serving(self):
@@ -113,6 +126,7 @@ class AppSmokeTests(unittest.TestCase):
         self.assert_served(job)
         status = self.client.get("/status").get_data(as_text=True)
         self.assertIn(f"/download/{job['id']}", status)
+        self.assertIn(f'/download/{job["id"]}" target="_blank" rel="noopener"', status)
         self.assertIn("100%", status)
         Path(job["file"]).unlink()
         self.assertEqual(self.client.get(f"/download/{job['id']}").status_code, 404)
@@ -149,6 +163,21 @@ class AppSmokeTests(unittest.TestCase):
         self.assertNotEqual(response.get_json()["job"]["id"], failed_job["id"])
         self.wait_for_jobs(0, errors=2)
 
+    def test_concurrent_matching_titles_keep_both_files(self):
+        self.submit("/fixture/collision-one")
+        self.submit("/fixture/collision-two")
+        try:
+            self.assertTrue(self.server.both_arrived.wait(10), "Matching-title downloads did not run concurrently")
+        finally:
+            self.server.release.set()
+        finished = self.wait_for_jobs(2)
+        self.assertEqual({Path(job["file"]).name for job in finished}, {
+            "Container fixture collision 2026-09-16 00_26.wav",
+            "Container fixture collision 2026-09-16 00_26 (2).wav",
+        })
+        for job in finished:
+            self.assert_served(job, SECOND_MEDIA if job["url"].endswith("collision-two") else MEDIA)
+
     def test_repeated_download_keeps_both_files(self):
         url = self.base_url + "/fixture/repeated"
         first_response = self.client.post("/api/v1/downloads", json={"url": url})
@@ -164,6 +193,11 @@ class AppSmokeTests(unittest.TestCase):
         finished = self.wait_for_jobs(2)
         self.assertEqual(len({job["file"] for job in finished}), 2)
         self.assertEqual(first_path.stat().st_mtime_ns, first_stat.st_mtime_ns)
+        names = {Path(job["file"]).name for job in finished}
+        self.assertEqual(names, {
+            "Container fixture repeated 2026-09-16 00_26.wav",
+            "Container fixture repeated 2026-09-16 00_26 (2).wav",
+        })
         for job in finished:
             self.assert_served(job)
             with self.client.get(f"/api/v1/downloads/{job['id']}/file") as response:

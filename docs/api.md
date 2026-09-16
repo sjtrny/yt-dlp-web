@@ -70,6 +70,10 @@ Final states: `complete`, `failed`, `interrupted`.
 is available now. `title` has at most 80 characters. `progress` is display text,
 not a number. Times are UTC ISO 8601 strings. `finished_at` is null while active.
 
+Completed live recordings show `Recorded - 1h 23m`, using the saved media's
+duration. If the duration is unknown, they show `Recorded`. Ordinary downloads
+still show `100%` when complete.
+
 GET `/downloads` lists jobs by creation time, newest first. Use `?status=active`
 or an exact state to filter the list. There is no pagination.
 

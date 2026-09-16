@@ -118,9 +118,28 @@ def timestamp(value):
     return datetime.fromtimestamp(value, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z") if value is not None else None
 
 
+@app.template_filter("download_progress")
+def download_progress(job):
+    if job["status"] != "complete" or not job.get("live"):
+        return job["progress"]
+    duration = job.get("duration")
+    if duration is None:
+        return "Recorded"
+    minutes, seconds = divmod(int(duration), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        length = f"{hours}h {minutes}m"
+    elif minutes:
+        length = f"{minutes}m {seconds}s"
+    else:
+        length = f"{seconds}s" if duration >= 1 else "<1s"
+    return f"Recorded - {length}"
+
+
 def job_json(job):
     return {
-        **{key: job.get(key) for key in ("id", "url", "title", "status", "progress", "live", "task_id", "error")},
+        **{key: job.get(key) for key in ("id", "url", "title", "status", "live", "task_id", "error")},
+        "progress": download_progress(job),
         "created_at": timestamp(job["created_at"]), "finished_at": timestamp(job.get("finished_at")),
         "can_stop": bool(job.get("stoppable") and not job.get("stopping") and job["status"] in ACTIVE_STATES),
         "status_url": f"/api/v1/downloads/{job['id']}",
@@ -207,6 +226,7 @@ def download(job):
                     job["progress"] = "Finalizing…"
                 elif kind == "complete":
                     final_file = event.get("file")
+                    job["duration"] = event.get("duration")
                 elif kind == "error":
                     failure = event.get("error") or "Download failed"
                 if kind != "progress":
@@ -240,6 +260,7 @@ def download(job):
                 job.update(status="failed", error=failure)
             else:
                 job.update(status="complete", file=str(path), progress="100%")
+                job["progress"] = download_progress(job)
             store.save_job(job)
             jobs.remove(job)
             if failure:
@@ -299,12 +320,12 @@ def status():
 
 
 @app.get("/download/<job_id>")
-def serve(job_id):
+def serve(job_id, *, as_attachment=False):
     with lock:
         path = next((job.get("file") for job in complete if job["id"] == job_id), None)
     if not path or not Path(path).resolve().is_relative_to(Path(DOWNLOAD_DIR).resolve()) or not Path(path).is_file():
         abort(404)
-    return send_file(path, as_attachment=True)
+    return send_file(path, as_attachment=as_attachment)
 
 
 def json_object(allowed=None):
@@ -352,7 +373,7 @@ def api_stop(job_id):
 
 @app.get("/api/v1/downloads/<job_id>/file")
 def api_file(job_id):
-    return serve(job_id)
+    return serve(job_id, as_attachment=True)
 
 
 def require_task(task_id):

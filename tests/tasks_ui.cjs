@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const net = require('node:net');
 const os = require('node:os');
@@ -13,6 +13,7 @@ const defaultTimezone = process.env.YTDLP_DEFAULT_TIMEZONE || 'UTC';
 
 test('server-rendered UI', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'yt-dlp-web-ui-'));
+  const media = path.join(directory, 'browser-fixture.mp4');
   const socket = net.createServer();
   await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
   const port = socket.address().port;
@@ -25,7 +26,7 @@ test('server-rendered UI', async () => {
       `from pathlib import Path; import app; app.WORKER = Path('tests/fixtures/control_worker.py').resolve(); app.init_runtime(); app.app.run(host='127.0.0.1', port=${port}, threaded=True)`], {
       cwd: root,
       env: {...process.env, YTDLP_DOWNLOAD_DIR: directory, YTDLP_STATE_DIR: path.join(directory, 'state'),
-        YTDLP_TEST_BARRIER_DIR: directory},
+        YTDLP_TEST_BARRIER_DIR: directory, YTDLP_TEST_MEDIA_FILE: media},
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     server.stdout.on('data', data => { logs += data; });
@@ -44,6 +45,10 @@ test('server-rendered UI', async () => {
   }
 
   try {
+    const fixture = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi',
+      '-i', 'testsrc2=size=160x90:rate=10', '-t', '3', '-c:v', 'libx264', '-preset', 'ultrafast',
+      '-threads', '1', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', media], {encoding: 'utf8'});
+    assert.equal(fixture.status, 0, fixture.stderr);
     await start();
     browser = await chromium.launch({headless: true});
     const page = await browser.newPage({viewport: {width: 1000, height: 800}});
@@ -86,8 +91,29 @@ test('server-rendered UI', async () => {
     await page.getByRole('button', {name: 'Stop'}).waitFor();
     await page.getByRole('button', {name: 'Stop'}).click();
     fs.writeFileSync(path.join(directory, 'release-finalizing'), '');
-    await page.locator('a[href^="/download/"]').waitFor();
+    const completedLink = page.locator('a[href^="/download/"]');
+    await completedLink.waitFor();
+    assert.equal(await completedLink.locator('..').locator('span').textContent(), 'Recorded - 3s');
     assert.equal(await page.locator('script').count(), 1);
+    const [playback] = await Promise.all([page.waitForEvent('popup'), completedLink.click()]);
+    await playback.waitForLoadState('domcontentloaded');
+    assert.match(playback.url(), /\/download\//);
+    await playback.waitForFunction(() => document.querySelector('video')?.readyState >= 2);
+    const video = playback.locator('video');
+    assert.equal(await video.evaluate(element => element.duration), 3);
+    await video.evaluate(async element => { element.muted = true; await element.play(); });
+    await playback.waitForFunction(() => document.querySelector('video').currentTime > 0.1);
+    await video.evaluate(element => { element.pause(); element.currentTime = 1.5; });
+    await playback.waitForFunction(() => {
+      const element = document.querySelector('video');
+      return !element.seeking && Math.abs(element.currentTime - 1.5) < 0.1;
+    });
+    if (process.env.YTDLP_BROWSER_ARTIFACT_DIR) {
+      fs.mkdirSync(process.env.YTDLP_BROWSER_ARTIFACT_DIR, {recursive: true});
+      await page.screenshot({path: path.join(process.env.YTDLP_BROWSER_ARTIFACT_DIR, 'downloads.png'), fullPage: true});
+      await playback.screenshot({path: path.join(process.env.YTDLP_BROWSER_ARTIFACT_DIR, 'playback.png')});
+    }
+    await playback.close();
 
     await stop();
     await start();

@@ -177,7 +177,7 @@ with YoutubeDL({'quiet': True}) as ydl:
             with self.subTest(override="stock" if override is UNSET else "custom"):
                 result = self.invoke(sys.executable, str(ROOT / "tests" / "_app_smoke.py"), override=override, plugins=True)
                 self.assert_success(result)
-                self.assertIn("Ran 4 tests", result.stderr)
+                self.assertIn("Ran 5 tests", result.stderr)
 
     def test_real_live_stops_with_stock_and_override(self):
         for override in (UNSET, self.bundle):

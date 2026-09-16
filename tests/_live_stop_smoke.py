@@ -219,7 +219,7 @@ class LiveStopTests(unittest.TestCase):
         self.assertTrue(path.is_relative_to(self.output))
         self.assertEqual(path.suffix, ".mp4")
         self.assertGreater(path.stat().st_size, 1000)
-        self.assertEqual(job["progress"], "100%")
+        self.assertTrue(job["progress"].startswith("Recorded - "), job["progress"])
         probe = subprocess.run(
             ["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
             check=True, text=True, capture_output=True, timeout=10,
@@ -229,6 +229,7 @@ class LiveStopTests(unittest.TestCase):
         self.assertEqual({stream["codec_type"] for stream in info["streams"]}, {"video", "audio"})
         duration = float(info["format"]["duration"])
         self.assertGreater(duration, 1)
+        self.assertAlmostEqual(job["duration"], duration, delta=0.05)
         decoded = subprocess.run(
             ["ffmpeg", "-v", "error", "-xerror", "-i", str(path), "-f", "null", "-"],
             text=True, capture_output=True, timeout=15,
@@ -237,7 +238,7 @@ class LiveStopTests(unittest.TestCase):
         with self.client.get(f"/download/{job['id']}") as response:
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.data, path.read_bytes())
-            self.assertIn("attachment;", response.headers["Content-Disposition"])
+            self.assertIn("inline;", response.headers["Content-Disposition"])
         return duration
 
     def test_only_selected_live_recording_stops_and_both_videos_play(self):

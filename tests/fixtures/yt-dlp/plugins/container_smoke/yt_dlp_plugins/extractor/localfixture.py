@@ -27,7 +27,8 @@ class ContainerSmokeIE(InfoExtractor):
             }
         return {
             "id": video_id,
-            "title": f"Container fixture {video_id}",
+            "title": "Container fixture collision" if video_id.startswith("collision-") else f"Container fixture {video_id}",
+            "epoch": 1789518360,
             "url": f"{origin}/media/{video_id}.wav",
             "ext": "wav",
             "vcodec": "none",
