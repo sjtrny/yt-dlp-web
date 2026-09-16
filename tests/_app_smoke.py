@@ -15,24 +15,42 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app as web
 
 
-def audio_fixture():
+def audio_fixture(seconds=1):
     output = BytesIO()
     with wave.open(output, "wb") as audio:
         audio.setnchannels(1)
         audio.setsampwidth(2)
         audio.setframerate(8000)
-        audio.writeframes(b"\0\0" * 8000)
+        audio.writeframes(b"\0\0" * 8000 * seconds)
     return output.getvalue()
 
 
 MEDIA = audio_fixture()
 SECOND_MEDIA = MEDIA[:-2] + b"\x01\x00"
+LARGE_MEDIA = audio_fixture(60)
 
 
 class MediaHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/media/failure.wav":
             self.send_error(404, "Fixture media does not exist")
+            return
+        if self.path.startswith("/media/cancel-"):
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Content-Length", str(len(LARGE_MEDIA)))
+            self.end_headers()
+            try:
+                self.wfile.write(LARGE_MEDIA[:32768])
+                self.wfile.flush()
+                with self.server.arrivals_lock:
+                    self.server.arrivals += 1
+                    if self.server.arrivals >= 2:
+                        self.server.both_arrived.set()
+                if self.server.release.wait(15):
+                    self.wfile.write(LARGE_MEDIA[32768:])
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             return
         if self.path.startswith(("/media/parallel-", "/media/collision-")):
             with self.server.arrivals_lock:
@@ -83,6 +101,7 @@ class AppSmokeTests(unittest.TestCase):
         with web.lock:
             self.assertFalse(web.jobs, "Previous jobs must finish before the next check")
             web.complete.clear()
+            web.stopped.clear()
             web.errors.clear()
         self.server.arrivals = 0
         self.server.both_arrived.clear()
@@ -131,6 +150,44 @@ class AppSmokeTests(unittest.TestCase):
         Path(job["file"]).unlink()
         self.assertEqual(self.client.get(f"/download/{job['id']}").status_code, 404)
         self.assertEqual(self.client.get("/download/unknown").status_code, 404)
+
+    def test_stop_keeps_partial_files_and_other_download_continues(self):
+        self.submit("/fixture/cancel-one")
+        self.submit("/fixture/cancel-two")
+        try:
+            self.assertTrue(self.server.both_arrived.wait(10))
+            with web.lock:
+                first = next(job for job in web.jobs if job["url"].endswith("cancel-one"))
+                second = next(job for job in web.jobs if job["url"].endswith("cancel-two"))
+                worker = first["worker"]
+            deadline = time.monotonic() + 5
+            while first["progress"] == "0%" and time.monotonic() < deadline:
+                time.sleep(.025)
+            self.assertGreater(float(first["progress"].rstrip("%")), 0)
+            self.assertTrue(self.client.get(f"/api/v1/downloads/{first['id']}").get_json()["job"]["can_stop"])
+            self.assertIn(f'/stop/{first["id"]}', self.client.get("/status").get_data(as_text=True))
+            self.assertEqual(self.client.post(f"/api/v1/downloads/{first['id']}/stop").status_code, 202)
+            deadline = time.monotonic() + 5
+            while first in web.jobs and time.monotonic() < deadline:
+                time.sleep(.025)
+            self.assertIn(first, web.stopped)
+            self.assertIsNotNone(worker.poll())
+            self.assertEqual(self.client.post(f"/api/v1/downloads/{first['id']}/stop").status_code, 200)
+            self.assertIn(second, web.jobs)
+            self.assertFalse(second["stopping"])
+            self.assertIsNone(second["worker"].poll())
+            [partial] = list(Path(self.output.name).glob(f"*{first['id']}*.part"))
+            retained = partial.read_bytes()
+            self.assertGreater(len(retained), 0)
+            self.assertLess(len(retained), len(LARGE_MEDIA))
+            self.assertEqual(retained, LARGE_MEDIA[:len(retained)])
+            self.assertEqual(self.client.get(f"/download/{first['id']}").status_code, 404)
+        finally:
+            self.server.release.set()
+        [completed] = self.wait_for_jobs(1)
+        self.assertEqual(completed["id"], second["id"])
+        self.assert_served(completed, LARGE_MEDIA)
+        self.assertEqual(partial.read_bytes(), retained)
 
     def test_native_plugin_concurrent_downloads(self):
         self.submit("/fixture/parallel-one")

@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 from tempfile import TemporaryFile
@@ -20,6 +21,7 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16384
 jobs = []
 complete = []
+stopped = []
 errors = []
 lock = RLock()
 TITLE_MAX = 80
@@ -49,6 +51,8 @@ def init_runtime():
                 candidate.save_job(job)
             if job["status"] == "complete":
                 complete.append(job)
+            elif job["status"] == "stopped":
+                stopped.append(job)
             else:
                 errors.append((job, job.get("error", "Download interrupted")))
         store = candidate
@@ -66,7 +70,7 @@ def active_download(url):
 
 def find_job(job_id):
     with lock:
-        job = next((item for item in [*jobs, *complete, *(item[0] for item in errors)] if item["id"] == job_id), None)
+        job = next((item for item in [*jobs, *complete, *stopped, *(item[0] for item in errors)] if item["id"] == job_id), None)
         if job is None:
             abort(404, "Download not found")
         return job
@@ -191,12 +195,14 @@ def download(job):
     final_file = None
     failure = None
     path = None
+    was_stopped = False
     try:
         process = subprocess.Popen(
             [sys.executable, str(WORKER), job["url"], str(DOWNLOAD_DIR), job["id"]]
             + (["--live-only"] if job.get("live_only") else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
             pass_fds=(store.owner.fileno(),),
+            start_new_session=True,
         )
         with lock:
             job["worker"] = process
@@ -208,6 +214,7 @@ def download(job):
                     title = event.get("title") or "Untitled"
                     job["title"] = title[: TITLE_MAX - 1] + "…" if len(title) > TITLE_MAX else title
                     job["live"] = bool(event.get("live"))
+                    job["stoppable"] = not job["live"]
                     if not job.get("stopping"):
                         job["status"] = "recording" if job["live"] else "downloading"
                     if job["live"] and not job.get("stopping"):
@@ -227,17 +234,25 @@ def download(job):
                 elif kind == "complete":
                     final_file = event.get("file")
                     job["duration"] = event.get("duration")
+                elif kind == "stopped":
+                    was_stopped = True
                 elif kind == "error":
                     failure = event.get("error") or "Download failed"
                 if kind != "progress":
                     store.save_job(job)
         returncode = process.wait()
-        if failure:
+        cancelled = job.get("stopping") and not job.get("live")
+        # A published, verified file wins a Stop/completion race. Otherwise a
+        # cancelled transfer is not a failed or completed download.
+        was_stopped = (was_stopped or cancelled) and not final_file
+        if was_stopped:
+            failure = None
+        elif failure:
             raise RuntimeError(failure)
-        if returncode:
+        elif returncode and not (cancelled and final_file):
             raise RuntimeError(f"Download worker exited with code {returncode}; partial files were retained")
         path = Path(final_file).resolve() if final_file else None
-        if not path or not path.is_relative_to(Path(DOWNLOAD_DIR).resolve()) or not path.is_file():
+        if not was_stopped and (not path or not path.is_relative_to(Path(DOWNLOAD_DIR).resolve()) or not path.is_file()):
             raise RuntimeError("Download ended without a completed file")
     except Exception as error:
         failure = str(error)
@@ -255,9 +270,11 @@ def download(job):
             job.pop("worker", None)
             # Keep URL ownership until the worker has exited, including its
             # graceful cleanup after an event-pipe or parent-side failure.
-            job.update(stoppable=False, finished_at=time.time())
+            job.update(stoppable=False, stopping=False, finished_at=time.time())
             if failure:
                 job.update(status="failed", error=failure)
+            elif was_stopped:
+                job.update(status="stopped", progress="Stopped")
             else:
                 job.update(status="complete", file=str(path), progress="100%")
                 job["progress"] = download_progress(job)
@@ -265,6 +282,8 @@ def download(job):
             jobs.remove(job)
             if failure:
                 errors.insert(0, (job, failure))
+            elif was_stopped:
+                stopped.insert(0, job)
             else:
                 complete.insert(0, job)
 
@@ -277,23 +296,45 @@ def index():
             submit_download(url)
         return redirect("/")
     with lock:
-        return render_template("index.html", jobs=jobs, complete=complete, errors=errors)
+        return render_template("index.html", jobs=jobs, complete=complete, stopped=stopped, errors=errors)
+
+
+def cancel_transfer(process):
+    """Stop only this download's isolated process group, including FFmpeg."""
+    try:
+        # The request saves its stopping state under this lock before a fast
+        # worker exit can be mistaken for a failed transfer.
+        with lock:
+            if process.poll() is not None:
+                return
+            os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            # Some backends wait for blocked fragment threads during cleanup.
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+    except ProcessLookupError:
+        pass  # Natural completion can race with the Stop request.
 
 
 def stop_download(job_id):
     with lock:
         job = next((item for item in jobs if item["id"] == job_id), None)
         if job is None:
-            if not any(item["id"] == job_id for item in complete) and not any(item[0]["id"] == job_id for item in errors):
-                abort(404)
+            return find_job(job_id)
         elif not job.get("stopping"):
-            if not job.get("live") or not job.get("stoppable"):
-                abort(409, "This recording is not ready to stop or is already finalizing")
+            if not job.get("stoppable"):
+                abort(409, "This download is not ready to stop or is already finalizing")
             process = job.get("worker")
             if process is not None and process.poll() is None:
                 try:
-                    process.stdin.write(json.dumps({"action": "stop"}) + "\n")
-                    process.stdin.flush()
+                    if job.get("live"):
+                        process.stdin.write(json.dumps({"action": "stop"}) + "\n")
+                        process.stdin.flush()
+                    else:
+                        Thread(target=cancel_transfer, args=(process,), daemon=True,
+                               name=f"stop-{job['id'][:8]}").start()
                 except (BrokenPipeError, OSError, ValueError):
                     # The worker may have finished between displaying and clicking Stop.
                     pass
@@ -316,7 +357,7 @@ def stop(job_id):
 @app.get("/status")
 def status():
     with lock:
-        return render_template("status.html", jobs=jobs, complete=complete, errors=errors)
+        return render_template("status.html", jobs=jobs, complete=complete, stopped=stopped, errors=errors)
 
 
 @app.get("/download/<job_id>")
@@ -349,10 +390,10 @@ def api_downloads():
             result = job_json(job)
         return jsonify(job=result, created=created), 202 if created else 200, {"Location": result["status_url"]}
     status_filter = request.args.get("status")
-    if status_filter and status_filter not in (*ACTIVE_STATES, "complete", "failed", "interrupted", "active"):
+    if status_filter and status_filter not in (*ACTIVE_STATES, "complete", "stopped", "failed", "interrupted", "active"):
         raise ValueError("Unknown download status")
     with lock:
-        all_jobs = [*jobs, *complete, *(item[0] for item in errors)]
+        all_jobs = [*jobs, *complete, *stopped, *(item[0] for item in errors)]
         all_jobs.sort(key=lambda job: job["created_at"], reverse=True)
         return jsonify(jobs=[job_json(job) for job in all_jobs if not status_filter or job["status"] == status_filter
                              or (status_filter == "active" and job["status"] in ACTIVE_STATES)])

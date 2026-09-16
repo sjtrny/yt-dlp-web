@@ -1,7 +1,8 @@
-"""Run one yt-dlp job with an isolated, graceful live-recording control channel.
+"""Run one yt-dlp job with isolated download and live-recording Stop controls.
 
 The parent reads newline-delimited JSON from stdout and writes ``{"action":
-"stop"}`` to stdin. Backend output, including FFmpeg output, goes to stderr.
+"stop"}`` to stdin for live recordings. SIGTERM cancels ordinary downloads.
+Backend output, including FFmpeg output, goes to stderr.
 """
 
 from contextlib import contextmanager
@@ -9,11 +10,20 @@ import json
 import math
 import os
 from pathlib import Path
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
 from threading import Lock, Thread, local
+
+
+class DownloadStopped(BaseException):
+    """Leave downloader retry handlers and unwind open files/subprocesses."""
+
+
+def cancel_transfer(signum, frame):
+    raise DownloadStopped
 
 
 class Events:
@@ -341,12 +351,17 @@ def run_job(url, directory, job_id, events, control, *, live_only=False):
             last_progress = value
             events.send("progress", progress=value)
 
+    def postprocess(data):
+        if not live and data.get("status") == "started":
+            events.send("finalizing")
+
     options = {
         "paths": {"home": str(Path(directory).resolve())},
         # Isolate partial files until verified media gets its readable name.
         "outtmpl": {"default": f".%(title).150B [{job_id}].%(ext)s"},
         "match_filter": metadata,
         "progress_hooks": [progress],
+        "postprocessor_hooks": [postprocess],
         "noplaylist": live_only,
     }
     with controlled_ffmpeg(control), YoutubeDL(options) as ydl:
@@ -375,8 +390,12 @@ def main():
                 live_only = len(sys.argv) == 5 and sys.argv[4] == "--live-only"
                 if len(sys.argv) != 4 and not live_only:
                     raise ValueError("Expected URL, download directory, and job ID.")
+                signal.signal(signal.SIGTERM, cancel_transfer)
                 Thread(target=read_commands, args=(sys.stdin, control), daemon=True).start()
                 run_job(*sys.argv[1:4], events, control, live_only=live_only)
+        except DownloadStopped:
+            control.finish()
+            events.send("stopped")
         except Exception as error:
             control.finish()
             events.send("error", error=str(error))

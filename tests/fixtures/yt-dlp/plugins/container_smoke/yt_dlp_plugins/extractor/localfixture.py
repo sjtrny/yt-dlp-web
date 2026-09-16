@@ -13,7 +13,7 @@ class ContainerSmokeIE(InfoExtractor):
         origin = f"http://127.0.0.1:{match.group('port')}"
         if video_id == "task-offline":
             raise UserNotLive(video_id=video_id)
-        if video_id.startswith("live-"):
+        if video_id.startswith("live-") or video_id == "vod-ffmpeg":
             if video_id == "live-delayed":
                 self._download_webpage(f"{origin}/metadata/delayed", video_id, note=False)
             return {
@@ -23,7 +23,7 @@ class ContainerSmokeIE(InfoExtractor):
                 "ext": "mp4",
                 "protocol": "m3u8",
                 "is_live": (self._download_webpage(f"{origin}/metadata/flip", video_id, note=False).strip() == "live")
-                if video_id == "live-flips" else True,
+                if video_id == "live-flips" else video_id != "vod-ffmpeg",
             }
         return {
             "id": video_id,

@@ -33,7 +33,7 @@ class ApiTaskTests(unittest.TestCase):
         self.patch_config = patch.dict(web.app.config, {"TESTING": True})
         self.patch_config.start()
         self.addCleanup(self.patch_config.stop)
-        web.jobs.clear(); web.complete.clear(); web.errors.clear()
+        web.jobs.clear(); web.complete.clear(); web.stopped.clear(); web.errors.clear()
         web.init_runtime()
         self.client = web.app.test_client()
 
@@ -59,7 +59,7 @@ class ApiTaskTests(unittest.TestCase):
             time.sleep(.01)
         self.assertFalse(web.jobs, "Test workers did not exit")
         web.store.close()
-        web.jobs.clear(); web.complete.clear(); web.errors.clear()
+        web.jobs.clear(); web.complete.clear(); web.stopped.clear(); web.errors.clear()
 
     def submit(self, url="https://example.test/live", headers=None):
         return self.client.post("/api/v1/downloads", json={"url": url}, headers=headers)
@@ -134,6 +134,57 @@ class ApiTaskTests(unittest.TestCase):
         self.assertNotEqual(repeat.get_json()["job"]["id"], job["id"])
         self.finish(repeat.get_json()["job"])
         self.assertEqual(self.submit("https://example.test/another", headers=headers).status_code, 202)
+
+    def test_stopped_download_is_persisted_and_can_be_started_again(self):
+        url = "https://example.test/video"
+        job = self.submit(url).get_json()["job"]
+        self.wait_for(lambda: web.find_job(job["id"]).get("stoppable"))
+        self.assertEqual(self.client.post(job["status_url"] + "/stop").status_code, 202)
+        self.wait_for(lambda: not web.jobs)
+        self.assertFalse(web.errors)
+        self.assertFalse(web.complete)
+        response = self.client.get(job["status_url"]).get_json()["job"]
+        self.assertEqual(response["status"], "stopped")
+        self.assertEqual(response["progress"], "Stopped")
+        self.assertFalse(response["can_stop"])
+        self.assertIsNone(response["download_url"])
+        self.assertIsNotNone(response["finished_at"])
+        self.assertEqual(self.client.post(job["status_url"] + "/stop").status_code, 200)
+        self.assertEqual(self.client.get(job["status_url"] + "/file").status_code, 404)
+        self.assertEqual(self.client.get("/api/v1/downloads?status=stopped").get_json()["jobs"], [response])
+        self.assertEqual(self.client.get("/api/v1/downloads?status=active").get_json()["jobs"], [])
+        web.scheduler.stop()
+        web.store.close()
+        web.store = None; web.scheduler = None
+        web.stopped.clear()
+        web.init_runtime()
+        self.assertEqual(self.client.get(job["status_url"]).get_json()["job"], response)
+        page = self.client.get("/").get_data(as_text=True)
+        self.assertIn("<h2>Stopped</h2>", page)
+        self.assertNotIn("<h2>Failed</h2>", page)
+        repeat = self.submit(url)
+        self.assertEqual(repeat.status_code, 202)
+        self.assertNotEqual(repeat.get_json()["job"]["id"], job["id"])
+
+    def test_stop_bounds_stuck_worker_cleanup_and_keeps_url_reserved(self):
+        url = "https://example.test/video-blocked"
+        job = self.submit(url).get_json()["job"]
+        self.wait_for(lambda: web.find_job(job["id"]).get("stoppable"))
+        worker = web.find_job(job["id"])["worker"]
+        started = time.monotonic()
+        for _ in range(2):
+            response = self.client.post(job["status_url"] + "/stop")
+            self.assertEqual(response.status_code, 202)
+            self.assertEqual(response.get_json()["job"]["status"], "stopping")
+        self.assertLess(time.monotonic() - started, 1)
+        duplicate = self.submit(url)
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertEqual(duplicate.get_json()["job"]["id"], job["id"])
+        self.wait_for(lambda: not web.jobs)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertIsNotNone(worker.poll())
+        self.assertEqual(self.client.get(job["status_url"]).get_json()["job"]["status"], "stopped")
+        self.assertFalse(web.errors)
 
     def test_url_stays_reserved_through_finalization(self):
         job = self.submit().get_json()["job"]
@@ -287,7 +338,7 @@ class ApiTaskTests(unittest.TestCase):
         web.store.save_task(scheduled)
         web.store.close()
         web.store = None; web.scheduler = None
-        web.jobs.clear(); web.complete.clear(); web.errors.clear()
+        web.jobs.clear(); web.complete.clear(); web.stopped.clear(); web.errors.clear()
         web.init_runtime()
         self.wait_for(lambda: web.scheduler.get(scheduled["id"])["last_result"] == "offline")
         self.assertEqual(web.scheduler.get(task["id"])["last_result"], "never")
