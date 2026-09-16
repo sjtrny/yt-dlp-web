@@ -20,10 +20,14 @@ Open <http://localhost:8080>.
 
 | Variable | Default | Use |
 | --- | --- | --- |
+| `YTDLP_PORT` | `8080` | Web listening port (1–65535); unset or empty uses the default |
 | `YTDLP_DOWNLOAD_DIR` | `/downloads` | Media |
 | `YTDLP_STATE_DIR` | `<download-dir>/.yt-dlp-web` | History and Tasks |
 | `YTDLP_DEFAULT_TIMEZONE` | `UTC` | Default TZ for new Tasks; IANA time zone |
 | `YTDLP_OVERRIDE_DIR` | Unset | Custom yt-dlp package |
+
+For port 9090, use `-e YTDLP_PORT=9090 -p 127.0.0.1:9090:9090` in place of
+the default `-p` option. Open <http://localhost:9090>.
 
 ### Overrides
 

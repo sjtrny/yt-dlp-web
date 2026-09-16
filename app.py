@@ -451,7 +451,13 @@ def task_action(task_id, action):
 
 if __name__ == "__main__":
     try:
+        port = int(os.environ.get("YTDLP_PORT") or "8080")
+        if not 1 <= port <= 65535:
+            raise ValueError
+    except ValueError:
+        raise SystemExit("YTDLP_PORT must be an integer from 1 to 65535") from None
+    try:
         init_runtime()
     except (OSError, RuntimeError) as error:
         raise SystemExit(str(error))
-    app.run(host="0.0.0.0", port=8080, threaded=True)
+    app.run(host="0.0.0.0", port=port, threaded=True)
