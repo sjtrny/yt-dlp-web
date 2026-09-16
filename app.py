@@ -360,6 +360,23 @@ def status():
         return render_template("status.html", jobs=jobs, complete=complete, stopped=stopped, errors=errors)
 
 
+@app.post("/completed/clear")
+@app.post("/completed/<job_id>/remove")
+def clear_completed(job_id=None):
+    with lock:
+        if job_id is not None:
+            job = find_job(job_id)
+            if job["status"] != "complete":
+                abort(409, "Only completed downloads can be removed from this list")
+            selected = [job]
+        else:
+            selected = [job for job in complete if not job.get("hidden")]
+        store.hide_completed(selected)
+        for job in selected:
+            job["hidden"] = True
+    return redirect("/", code=303)
+
+
 @app.get("/download/<job_id>")
 def serve(job_id, *, as_attachment=False):
     with lock:

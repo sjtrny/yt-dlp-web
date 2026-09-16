@@ -77,6 +77,10 @@ still show `100%` when complete.
 GET `/downloads` lists jobs by creation time, newest first. Use `?status=active`
 or an exact state to filter the list. There is no pagination.
 
+The Downloads page has X and Clear all controls for completed entries. These
+hide entries from the page only, including after a restart. They do not delete
+files or API history. Existing playback and API file links still work.
+
 ### Stop
 
 ```sh

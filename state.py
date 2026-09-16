@@ -56,6 +56,14 @@ class StateStore:
         with self.connection() as db:
             return [json.loads(row[0]) for row in db.execute("SELECT data FROM jobs ORDER BY rowid DESC")]
 
+    def hide_completed(self, jobs):
+        """Dismiss completed entries without removing their history or files."""
+        with self.connection() as db:
+            db.executemany(
+                "UPDATE jobs SET data = ? WHERE id = ? AND status = 'complete'",
+                [(self.job_data(dict(job, hidden=True)), job["id"]) for job in jobs],
+            )
+
     def load_tasks(self):
         with self.connection() as db:
             return {row[0]: json.loads(row[1]) for row in db.execute("SELECT id, data FROM tasks ORDER BY rowid")}

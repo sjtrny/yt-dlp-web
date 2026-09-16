@@ -213,6 +213,61 @@ class ApiTaskTests(unittest.TestCase):
             self.assertEqual(self.client.post("/api/v1/tasks", json={}, headers=headers).status_code, 403)
         self.assertFalse(web.jobs)
 
+    def test_clear_completed_hides_only_finished_rows_and_keeps_files_after_restart(self):
+        first = self.submit().get_json()["job"]
+        self.finish(first)
+        second = self.submit().get_json()["job"]
+        self.finish(second)
+        active = self.submit("https://example.test/live-next").get_json()["job"]
+        self.wait_for(lambda: web.find_job(active["id"]).get("stoppable"))
+        files = {Path(job["file"]): (Path(job["file"]).read_bytes(), Path(job["file"]).stat().st_mtime_ns)
+                 for job in web.complete}
+        remove = f"/completed/{first['id']}/remove"
+        self.assertEqual(self.client.get(remove).status_code, 405)
+        self.assertEqual(self.client.get("/completed/clear").status_code, 405)
+        self.assertEqual(self.client.post("/completed/unknown/remove").status_code, 404)
+        self.assertEqual(self.client.post(f"/completed/{active['id']}/remove").status_code, 409)
+        for route in (remove, "/completed/clear"):
+            self.assertEqual(self.client.post(route, headers={"Origin": "https://other.test"}).status_code, 403)
+        for _ in range(2):
+            self.assertEqual(self.client.post(remove).status_code, 303)
+        for route in ("/", "/status"):
+            page = self.client.get(route).get_data(as_text=True)
+            self.assertNotIn(f'/download/{first["id"]}', page)
+            self.assertIn(f'/download/{second["id"]}', page)
+        for _ in range(2):
+            self.assertEqual(self.client.post("/completed/clear").status_code, 303)
+        page = self.client.get("/status").get_data(as_text=True)
+        self.assertNotIn("<h2>Complete</h2>", page)
+        self.assertNotIn("Clear all", page)
+        self.assertIn(f'/stop/{active["id"]}', page)
+        self.assertEqual(self.client.get(active["status_url"]).get_json()["job"]["status"], "recording")
+
+        # A job that finishes after Clear all must still appear normally.
+        self.finish(active)
+        page = self.client.get("/status").get_data(as_text=True)
+        self.assertIn(f'/download/{active["id"]}', page)
+        self.assertNotIn(f'/download/{first["id"]}', page)
+        self.assertNotIn(f'/download/{second["id"]}', page)
+        web.scheduler.stop()
+        web.store.close()
+        web.store = None; web.scheduler = None
+        web.complete.clear()
+        web.init_runtime()
+        page = self.client.get("/").get_data(as_text=True)
+        self.assertIn(f'/download/{active["id"]}', page)
+        for job in (first, second):
+            self.assertNotIn(f'/download/{job["id"]}', page)
+            self.assertEqual(self.client.get(job["status_url"]).get_json()["job"]["status"], "complete")
+            for route in (f'/download/{job["id"]}', job["status_url"] + "/file"):
+                with self.client.get(route) as response:
+                    self.assertEqual(response.status_code, 200)
+                    self.assertIn(b"controlled test output", response.data)
+        self.assertEqual(len(self.client.get("/api/v1/downloads?status=complete").get_json()["jobs"]), 3)
+        for path, (contents, modified) in files.items():
+            self.assertEqual(path.read_bytes(), contents)
+            self.assertEqual(path.stat().st_mtime_ns, modified)
+
     def test_server_rendered_task_forms(self):
         response = self.client.post("/tasks", data={
             "name": "HTML task", "url": "https://example.test/offline", "cron": "*/5 * * * *",
