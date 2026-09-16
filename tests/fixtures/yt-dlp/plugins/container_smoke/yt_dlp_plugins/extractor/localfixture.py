@@ -11,6 +11,14 @@ class ContainerSmokeIE(InfoExtractor):
         match = self._match_valid_url(url)
         video_id = match.group("id")
         origin = f"http://127.0.0.1:{match.group('port')}"
+        if video_id == "playlist":
+            def entries():
+                for name in ("parallel-one", "parallel-two"):
+                    yield self.url_result(f"{origin}/fixture/{name}", title=name)
+                self._download_webpage(f"{origin}/metadata/playlist-next", video_id, note=False)
+                yield self.playlist_result([self.url_result(f"{origin}/fixture/parallel-three")])
+                yield self.url_result(f"{origin}/fixture/parallel-one")
+            return self.playlist_result(entries(), video_id, "Container playlist")
         if video_id == "task-offline":
             raise UserNotLive(video_id=video_id)
         if video_id.startswith("live-") or video_id == "vod-ffmpeg":

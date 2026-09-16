@@ -29,13 +29,25 @@ DOWNLOAD_DIR = Path(os.environ.get("YTDLP_DOWNLOAD_DIR", "/downloads"))
 WORKER = Path(__file__).with_name("recording_worker.py")
 store = None
 scheduler = None
+max_concurrent_downloads = 3
+
+
+def download_limit():
+    try:
+        value = int(os.environ.get("YTDLP_MAX_CONCURRENT_DOWNLOADS") or "3")
+        if value > 0:
+            return value
+    except ValueError:
+        pass
+    raise RuntimeError("YTDLP_MAX_CONCURRENT_DOWNLOADS must be a positive integer")
 
 
 def init_runtime():
-    global store, scheduler
+    global store, scheduler, max_concurrent_downloads
     with lock:
         if store is not None:
             return
+        max_concurrent_downloads = download_limit()
         destination = Path(DOWNLOAD_DIR)
         try:
             with TemporaryFile(dir=destination) as probe:
@@ -48,6 +60,8 @@ def init_runtime():
             if job["status"] in ACTIVE_STATES:
                 job.update(status="interrupted", stoppable=False, stopping=False, finished_at=time.time(),
                            error="The application stopped before this download completed. Partial files were retained.")
+                if job.get("kind") == "playlist":
+                    job.update(discovery_done=True, resolved=True)
                 candidate.save_job(job)
             if job["status"] == "complete":
                 complete.append(job)
@@ -57,15 +71,35 @@ def init_runtime():
                 errors.append((job, job.get("error", "Download interrupted")))
         store = candidate
         scheduler = TaskScheduler(
-            store, lock, submit_download, active_download, probe_live,
+            store, lock, submit_download,
+            lambda url: active_download(url, claim=True, limit_exempt=True), probe_live,
             default_timezone=os.environ.get("YTDLP_DEFAULT_TIMEZONE") or "UTC",
         )
         scheduler.start()
 
 
-def active_download(url):
+def active_download(url, *, claim=False, limit_exempt=False):
     with lock:
-        return next((job for job in jobs if job["url"] == url), None)
+        job = next((job for job in jobs if job["url"] == url), None)
+        changed = False
+        if job is not None and claim and not job.get("standalone", True):
+            job["standalone"] = True
+            changed = True
+        if job is not None and limit_exempt and not job.get("limit_exempt"):
+            job["limit_exempt"] = True
+            changed = True
+        if job is not None and limit_exempt and job.get("kind") == "playlist":
+            lookup = {item["id"]: item for item in all_jobs()}
+            for entry in job.get("entries", []):
+                child = lookup[entry["id"]]
+                if child["status"] in ACTIVE_STATES and not child.get("limit_exempt"):
+                    child["limit_exempt"] = True
+                    store.save_job(child)
+                    changed = True
+        if changed:
+            store.save_job(job)
+            dispatch_downloads()
+        return job
 
 
 def find_job(job_id):
@@ -76,26 +110,129 @@ def find_job(job_id):
         return job
 
 
-def submit_download(url, *, task_id=None, live_only=False):
+def submit_download(url, *, task_id=None, live_only=False, playlist=None, title=None, limit_exempt=False):
     url = normalize_url(url)
+    limit_exempt = limit_exempt or task_id is not None
     with lock:
-        existing = active_download(url)
+        existing = active_download(url, claim=playlist is None, limit_exempt=limit_exempt)
         if existing:
             return existing, False
-        job = {"id": uuid4().hex, "url": url, "title": "Loading…", "progress": "0%",
-               "live": False, "stoppable": False, "stopping": False, "status": "starting",
-               "created_at": time.time(), "finished_at": None, "task_id": task_id, "live_only": live_only}
+        job = {"id": uuid4().hex, "url": url, "title": short_title(title or "Loading…"), "progress": "Queued",
+               "kind": "video", "live": False, "stoppable": True, "stopping": False, "status": "queued",
+               "created_at": time.time(), "finished_at": None, "task_id": task_id, "live_only": live_only,
+               "limit_exempt": limit_exempt,
+               "resolved": bool(playlist or live_only), "standalone": playlist is None,
+               "playlist_id": playlist["id"] if playlist else None}
         store.save_job(job)
         jobs.append(job)
+        if playlist is None:
+            dispatch_downloads()
+        return job, True
+
+
+def short_title(title):
+    return title[: TITLE_MAX - 1] + "…" if len(title) > TITLE_MAX else title
+
+
+def all_jobs():
+    return [*jobs, *complete, *stopped, *(item[0] for item in errors)]
+
+
+def finish_job(job, status, *, error=None, **fields):
+    job.update(status=status, stoppable=False, stopping=False, finished_at=time.time(), **fields)
+    if error:
+        job["error"] = error
+    store.save_job(job)
+    jobs.remove(job)
+    if status == "complete":
+        complete.insert(0, job)
+    elif status == "stopped":
+        stopped.insert(0, job)
+    else:
+        errors.insert(0, (job, error or "Download interrupted"))
+
+
+def dispatch_downloads():
+    """Called under lock; reserve slots before starting any worker threads."""
+    running = sum(job.get("kind") != "playlist" and job.get("resolved") and job["status"] != "queued"
+                  and not job.get("limit_exempt") for job in jobs)
+    discovering = sum(not job.get("resolved") and job["status"] != "queued" for job in jobs)
+    for job in list(jobs):
+        if job["status"] != "queued":
+            continue
+        discovery = not job.get("resolved")
+        if (discovering if discovery else running) >= max_concurrent_downloads and (discovery or not job.get("limit_exempt")):
+            continue
+        job.update(status="discovering" if discovery else "starting",
+                   progress="Loading…" if discovery else "Starting…", stoppable=False)
+        store.save_job(job)
         try:
             Thread(target=download, args=(job,), daemon=True, name=f"download-{job['id'][:8]}").start()
         except Exception as error:
-            jobs.remove(job)
-            job.update(status="failed", error=str(error), finished_at=time.time())
-            store.save_job(job)
-            errors.insert(0, (job, str(error)))
-            raise
-        return job, True
+            finish_job(job, "failed", error=str(error))
+        else:
+            running += not discovery and not job.get("limit_exempt")
+            discovering += discovery
+
+
+def playlist_counts(playlist, lookup=None):
+    lookup = lookup if lookup is not None else {job["id"]: job for job in all_jobs()}
+    counts = dict(total=len(playlist.get("entries", [])), complete=0, active=0, queued=0, stopped=0, failed=0)
+    for entry in playlist.get("entries", []):
+        state = "stopped" if entry.get("cancelled") else lookup[entry["id"]]["status"]
+        key = "active" if state in ACTIVE_STATES and state != "queued" else state
+        counts[key if key in counts else "failed"] += 1
+    return counts
+
+
+def refresh_playlists():
+    lookup = {job["id"]: job for job in all_jobs()}
+    for playlist in list(jobs):
+        if playlist.get("kind") != "playlist":
+            continue
+        counts = playlist_counts(playlist, lookup)
+        playlist["progress"] = f'{counts["complete"]} of {counts["total"]} complete'
+        if not playlist.get("discovery_done") or counts["active"] or counts["queued"]:
+            continue
+        if playlist.get("stopping"):
+            finish_job(playlist, "stopped", progress="Stopped · " + playlist["progress"])
+        elif playlist.get("error") or counts["failed"]:
+            finish_job(playlist, "failed", error=playlist.get("error") or f'{counts["failed"]} playlist videos failed')
+        elif counts["stopped"]:
+            finish_job(playlist, "stopped", progress="Stopped · " + playlist["progress"])
+        else:
+            finish_job(playlist, "complete")
+
+
+def add_playlist_entry(playlist, event):
+    if playlist.get("stopping"):
+        return
+    title = short_title(event.get("title") or "Unavailable video")
+    try:
+        if event.get("error"):
+            raise ValueError(event["error"])
+        url = normalize_url(event.get("url"))
+        if url == playlist["url"]:
+            raise ValueError("Playlist entry points back to the playlist")
+        # Duplicate entries within a playlist use one download, even if it has
+        # already finished while the remaining entries are being discovered.
+        lookup = {job["id"]: job for job in all_jobs()}
+        if any(lookup[entry["id"]]["url"] == url for entry in playlist["entries"]):
+            return
+        child, _ = submit_download(url, task_id=playlist.get("task_id"), playlist=playlist, title=title,
+                                   limit_exempt=playlist.get("limit_exempt", False))
+        if child.get("kind") == "playlist":
+            raise ValueError("This entry refers to another active playlist, not a video")
+    except ValueError as error:
+        child = {"id": uuid4().hex, "url": playlist["url"], "title": title, "kind": "video",
+                 "status": "failed", "progress": "Failed", "error": str(error), "live": False,
+                 "created_at": time.time(), "finished_at": time.time(), "playlist_id": playlist["id"],
+                 "task_id": playlist.get("task_id")}
+        store.save_job(child)
+        errors.insert(0, (child, str(error)))
+    playlist["entries"].append({"id": child["id"]})
+    store.save_job(playlist)
+    dispatch_downloads()
 
 
 def probe_live(url):
@@ -124,6 +261,9 @@ def timestamp(value):
 
 @app.template_filter("download_progress")
 def download_progress(job):
+    if job.get("kind") == "playlist":
+        counts = playlist_counts(job)
+        return ("Stopped · " if job["status"] == "stopped" else "") + f'{counts["complete"]} of {counts["total"]} complete'
     if job["status"] != "complete" or not job.get("live"):
         return job["progress"]
     duration = job.get("duration")
@@ -143,11 +283,14 @@ def download_progress(job):
 def job_json(job):
     return {
         **{key: job.get(key) for key in ("id", "url", "title", "status", "live", "task_id", "error")},
+        "kind": job.get("kind", "video"), "playlist_id": job.get("playlist_id"),
+        **({"entries": job["entries"], "counts": playlist_counts(job),
+            "discovery_done": bool(job.get("discovery_done"))} if job.get("kind") == "playlist" else {}),
         "progress": download_progress(job),
         "created_at": timestamp(job["created_at"]), "finished_at": timestamp(job.get("finished_at")),
         "can_stop": bool(job.get("stoppable") and not job.get("stopping") and job["status"] in ACTIVE_STATES),
         "status_url": f"/api/v1/downloads/{job['id']}",
-        "download_url": f"/api/v1/downloads/{job['id']}/file" if job["status"] == "complete" else None,
+        "download_url": f"/api/v1/downloads/{job['id']}/file" if job["status"] == "complete" and job.get("kind") != "playlist" else None,
     }
 
 
@@ -196,29 +339,45 @@ def download(job):
     failure = None
     path = None
     was_stopped = False
+    discovery = not job.get("resolved")
+    metadata_received = False
+    playlist_received = False
     try:
         process = subprocess.Popen(
             [sys.executable, str(WORKER), job["url"], str(DOWNLOAD_DIR), job["id"]]
-            + (["--live-only"] if job.get("live_only") else []),
+            + (["--discover"] if discovery else ["--live-only"] if job.get("live_only") else ["--single-video"]),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
             pass_fds=(store.owner.fileno(),),
             start_new_session=True,
         )
         with lock:
             job["worker"] = process
+            if job.get("stopping"):
+                Thread(target=cancel_transfer, args=(process,), daemon=True).start()
         for line in process.stdout:
             event = json.loads(line)
             kind = event.get("event")
             with lock:
-                if kind == "metadata":
-                    title = event.get("title") or "Untitled"
-                    job["title"] = title[: TITLE_MAX - 1] + "…" if len(title) > TITLE_MAX else title
-                    job["live"] = bool(event.get("live"))
-                    job["stoppable"] = not job["live"]
+                if kind == "playlist":
+                    job.update(kind="playlist", title=short_title(event.get("title") or "Playlist"),
+                               entries=[], discovery_done=False, stoppable=True)
                     if not job.get("stopping"):
+                        job.update(status="discovering", progress="Loading playlist…")
+                    dispatch_downloads()
+                elif kind == "entry" and job.get("kind") == "playlist":
+                    add_playlist_entry(job, event)
+                elif kind == "playlist_complete":
+                    playlist_received = True
+                elif kind == "metadata":
+                    metadata_received = True
+                    title = event.get("title") or "Untitled"
+                    job["title"] = short_title(title)
+                    job["live"] = bool(event.get("live"))
+                    job["stoppable"] = not job["live"] and not discovery
+                    if not discovery and not job.get("stopping"):
                         job["status"] = "recording" if job["live"] else "downloading"
-                    if job["live"] and not job.get("stopping"):
-                        job["progress"] = "LIVE"
+                        job["progress"] = "LIVE" if job["live"] else "0%"
+                    dispatch_downloads()
                 elif kind == "progress" and not job.get("live") and not job.get("stopping"):
                     job["progress"] = event["progress"]
                 elif kind == "recording":
@@ -238,10 +397,10 @@ def download(job):
                     was_stopped = True
                 elif kind == "error":
                     failure = event.get("error") or "Download failed"
-                if kind != "progress":
+                if kind not in ("progress", "entry"):
                     store.save_job(job)
         returncode = process.wait()
-        cancelled = job.get("stopping") and not job.get("live")
+        cancelled = job.get("transfer_cancelled") or (job.get("stopping") and not job.get("live"))
         # A published, verified file wins a Stop/completion race. Otherwise a
         # cancelled transfer is not a failed or completed download.
         was_stopped = (was_stopped or cancelled) and not final_file
@@ -251,13 +410,20 @@ def download(job):
             raise RuntimeError(failure)
         elif returncode and not (cancelled and final_file):
             raise RuntimeError(f"Download worker exited with code {returncode}; partial files were retained")
+        if discovery and not was_stopped:
+            if job.get("kind") == "playlist" and not playlist_received:
+                raise RuntimeError("Playlist discovery ended before the listing was complete")
+            if job.get("kind") != "playlist" and not metadata_received:
+                raise RuntimeError("Could not read video metadata")
         path = Path(final_file).resolve() if final_file else None
-        if not was_stopped and (not path or not path.is_relative_to(Path(DOWNLOAD_DIR).resolve()) or not path.is_file()):
+        if not discovery and not was_stopped and (not path or not path.is_relative_to(Path(DOWNLOAD_DIR).resolve()) or not path.is_file()):
             raise RuntimeError("Download ended without a completed file")
     except Exception as error:
         failure = str(error)
     finally:
         if process is not None:
+            if failure and (discovery or not job.get("live")):
+                cancel_transfer(process)
             # EOF asks the isolated worker to finish if its monitor is interrupted.
             for stream in (process.stdin, process.stdout):
                 if stream:
@@ -270,22 +436,27 @@ def download(job):
             job.pop("worker", None)
             # Keep URL ownership until the worker has exited, including its
             # graceful cleanup after an event-pipe or parent-side failure.
-            job.update(stoppable=False, stopping=False, finished_at=time.time())
-            if failure:
-                job.update(status="failed", error=failure)
+            if job.get("kind") == "playlist":
+                job.update(discovery_done=True, resolved=True)
+                if not job.get("stopping"):
+                    job["status"] = "downloading"
+                if failure:
+                    job["error"] = failure
+                elif not job["entries"] and not job.get("stopping"):
+                    job["error"] = "Playlist contains no videos"
+                store.save_job(job)
+            elif failure:
+                finish_job(job, "failed", error=failure)
             elif was_stopped:
-                job.update(status="stopped", progress="Stopped")
+                finish_job(job, "stopped", progress="Stopped")
+            elif discovery:
+                job.update(resolved=True, status="queued", progress="Queued", stoppable=True)
+                store.save_job(job)
             else:
-                job.update(status="complete", file=str(path), progress="100%")
-                job["progress"] = download_progress(job)
-            store.save_job(job)
-            jobs.remove(job)
-            if failure:
-                errors.insert(0, (job, failure))
-            elif was_stopped:
-                stopped.insert(0, job)
-            else:
-                complete.insert(0, job)
+                job.update(status="complete", progress="100%")
+                finish_job(job, "complete", file=str(path), progress=download_progress(job))
+            dispatch_downloads()
+            refresh_playlists()
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -296,7 +467,7 @@ def index():
             submit_download(url)
         return redirect("/")
     with lock:
-        return render_template("index.html", jobs=jobs, complete=complete, stopped=stopped, errors=errors)
+        return render_template("index.html", **status_context())
 
 
 def cancel_transfer(process):
@@ -318,31 +489,58 @@ def cancel_transfer(process):
         pass  # Natural completion can race with the Stop request.
 
 
+def request_stop(job, *, force=False):
+    if job.get("stopping") or job["status"] not in ACTIVE_STATES:
+        return
+    if job["status"] == "queued":
+        finish_job(job, "stopped", progress="Cancelled")
+        return
+    if not job.get("stoppable"):
+        if not force:
+            abort(409, "This download is not ready to stop or is already finalizing")
+        if job["status"] == "finalizing":
+            return
+    job.update(stopping=True, status="stopping", progress="Stopping…")
+    job["transfer_cancelled"] = not job.get("live") or not job.get("resolved")
+    store.save_job(job)
+    process = job.get("worker")
+    if process is not None and process.poll() is None:
+        try:
+            if job.get("live") and job.get("resolved"):
+                process.stdin.write(json.dumps({"action": "stop"}) + "\n")
+                process.stdin.flush()
+            else:
+                Thread(target=cancel_transfer, args=(process,), daemon=True,
+                       name=f"stop-{job['id'][:8]}").start()
+        except (BrokenPipeError, OSError, ValueError):
+            pass  # Natural completion can race with Stop.
+
+
 def stop_download(job_id):
     with lock:
         job = next((item for item in jobs if item["id"] == job_id), None)
         if job is None:
             return find_job(job_id)
-        elif not job.get("stopping"):
-            if not job.get("stoppable"):
-                abort(409, "This download is not ready to stop or is already finalizing")
-            process = job.get("worker")
-            if process is not None and process.poll() is None:
-                try:
-                    if job.get("live"):
-                        process.stdin.write(json.dumps({"action": "stop"}) + "\n")
-                        process.stdin.flush()
-                    else:
-                        Thread(target=cancel_transfer, args=(process,), daemon=True,
-                               name=f"stop-{job['id'][:8]}").start()
-                except (BrokenPipeError, OSError, ValueError):
-                    # The worker may have finished between displaying and clicking Stop.
-                    pass
+        request_stop(job)
+        if job.get("kind") == "playlist":
+            lookup = {item["id"]: item for item in all_jobs()}
+            needed_elsewhere = {
+                entry["id"] for other in jobs
+                if other is not job and other.get("kind") == "playlist" and not other.get("stopping")
+                for entry in other["entries"] if not entry.get("cancelled")
+            }
+            for entry in job["entries"]:
+                child = lookup[entry["id"]]
+                if child["status"] not in ACTIVE_STATES:
+                    continue
+                shared = child.get("standalone", True) or child["id"] in needed_elsewhere
+                if shared:
+                    entry["cancelled"] = True
                 else:
-                    job["stopping"] = True
-                    job["status"] = "stopping"
-                    job["progress"] = "Stopping…"
-                    store.save_job(job)
+                    request_stop(child, force=True)
+            store.save_job(job)
+        dispatch_downloads()
+        refresh_playlists()
         return find_job(job_id)
 
 
@@ -357,7 +555,26 @@ def stop(job_id):
 @app.get("/status")
 def status():
     with lock:
-        return render_template("status.html", jobs=jobs, complete=complete, stopped=stopped, errors=errors)
+        return render_template("status.html", **status_context())
+
+
+def status_context():
+    lookup = {job["id"]: job for job in all_jobs()}
+    playlists = []
+    grouped = set()
+    for job in jobs:
+        if job.get("kind") != "playlist":
+            continue
+        members = [lookup[entry["id"]] for entry in job["entries"] if not entry.get("cancelled")]
+        grouped.update(member["id"] for member in members)
+        playlists.append(dict(job=job, counts=playlist_counts(job, lookup),
+                              active=[member for member in members if member["status"] in ACTIVE_STATES and member["status"] != "queued"],
+                              queued=[member for member in members if member["status"] == "queued"]))
+    ungrouped = [job for job in jobs if job.get("kind") != "playlist" and job["id"] not in grouped]
+    return dict(jobs=[job for job in ungrouped if job["status"] != "queued"],
+                queued=[job for job in ungrouped if job["status"] == "queued"], playlists=playlists,
+                complete=[job for job in complete if job.get("kind") != "playlist"],
+                stopped=stopped, errors=errors)
 
 
 @app.post("/completed/clear")
@@ -410,9 +627,8 @@ def api_downloads():
     if status_filter and status_filter not in (*ACTIVE_STATES, "complete", "stopped", "failed", "interrupted", "active"):
         raise ValueError("Unknown download status")
     with lock:
-        all_jobs = [*jobs, *complete, *stopped, *(item[0] for item in errors)]
-        all_jobs.sort(key=lambda job: job["created_at"], reverse=True)
-        return jsonify(jobs=[job_json(job) for job in all_jobs if not status_filter or job["status"] == status_filter
+        ordered = sorted(all_jobs(), key=lambda job: job["created_at"], reverse=True)
+        return jsonify(jobs=[job_json(job) for job in ordered if not status_filter or job["status"] == status_filter
                              or (status_filter == "active" and job["status"] in ACTIVE_STATES)])
 
 

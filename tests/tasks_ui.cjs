@@ -26,7 +26,7 @@ test('server-rendered UI', async () => {
       `from pathlib import Path; import app; app.WORKER = Path('tests/fixtures/control_worker.py').resolve(); app.init_runtime(); app.app.run(host='127.0.0.1', port=${port}, threaded=True)`], {
       cwd: root,
       env: {...process.env, YTDLP_DOWNLOAD_DIR: directory, YTDLP_STATE_DIR: path.join(directory, 'state'),
-        YTDLP_TEST_BARRIER_DIR: directory, YTDLP_TEST_MEDIA_FILE: media},
+        YTDLP_TEST_BARRIER_DIR: directory, YTDLP_TEST_MEDIA_FILE: media, YTDLP_MAX_CONCURRENT_DOWNLOADS: '2'},
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     server.stdout.on('data', data => { logs += data; });
@@ -180,6 +180,37 @@ test('server-rendered UI', async () => {
       fs.mkdirSync(process.env.YTDLP_BROWSER_ARTIFACT_DIR, {recursive: true});
       await page.screenshot({path: path.join(process.env.YTDLP_BROWSER_ARTIFACT_DIR, 'lean-ui.png'), fullPage: true});
     }
+    await page.getByRole('link', {name: 'Downloads'}).click();
+    await page.getByLabel('URL').fill('https://example.test/playlist');
+    await page.getByRole('button', {name: 'Download', exact: true}).click();
+    const playlist = page.locator('.playlist');
+    await playlist.getByText('0 of 6 complete · 2 active · 4 queued', {exact: true}).waitFor();
+    assert.equal(await playlist.getByRole('button', {name: 'Stop', exact: true}).count(), 2);
+    const queued = playlist.locator('details');
+    assert.equal(await queued.getAttribute('open'), null);
+    await queued.locator('summary').click();
+    fs.writeFileSync(path.join(directory, 'release-video-entry-1'), '');
+    await playlist.getByText('1 of 6 complete · 2 active · 3 queued', {exact: true}).waitFor();
+    assert.notEqual(await queued.getAttribute('open'), null, 'Refresh must retain the open queue');
+    await queued.locator('.job').filter({hasText: 'Video 6'}).getByRole('button', {name: 'Cancel'}).click();
+    await playlist.getByText('1 of 6 complete · 2 active · 2 queued · 1 stopped', {exact: true}).waitFor();
+    const playlistFile = page.getByRole('link', {name: 'Video 1', exact: true});
+    const playlistFileUrl = await playlistFile.getAttribute('href');
+    for (const width of [1000, 390]) {
+      await page.setViewportSize({width, height: 900});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      assert.equal(await playlist.getByRole('button', {name: 'Stop playlist', exact: true}).isEnabled(), true);
+      if (process.env.YTDLP_BROWSER_ARTIFACT_DIR) {
+        await page.screenshot({path: path.join(process.env.YTDLP_BROWSER_ARTIFACT_DIR, `playlist-${width}.png`), fullPage: true});
+      }
+    }
+    await playlist.getByRole('button', {name: 'Stop playlist', exact: true}).click();
+    await playlist.waitFor({state: 'detached'});
+    assert.equal(await page.getByRole('link', {name: 'Video 1', exact: true}).getAttribute('href'), playlistFileUrl);
+    assert.equal((await fetch(`${url}${playlistFileUrl}`)).status, 200);
+    assert.equal(fs.existsSync(path.join(directory, 'started-video-entry-6')), false);
+    assert.equal(await page.getByRole('heading', {name: 'Failed', exact: true}).count(), 0);
+    await page.getByRole('link', {name: 'Tasks'}).click();
     await task.getByRole('button', {name: 'Delete'}).click();
     assert.equal(await page.getByRole('heading', {name: 'Edited'}).count(), 0);
     assert.deepEqual(errors, []);

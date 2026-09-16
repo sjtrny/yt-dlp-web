@@ -10,7 +10,21 @@
 <script>
 const status = document.querySelector("#status")
 async function refresh() {
-  try { const r = await fetch("/status"); if (r.ok) status.innerHTML = await r.text() }
+  try {
+    const r = await fetch("/status")
+    if (r.ok) {
+      const html = await r.text()
+      if (getSelection()?.isCollapsed === false) return
+      const opened = [...status.querySelectorAll("details[open]")].map(element => element.id)
+      const focused = document.activeElement
+      const action = status.contains(focused) ? focused.closest("form")?.getAttribute("action") : null
+      const summary = focused?.tagName === "SUMMARY" ? focused.parentElement.id : null
+      if (status.innerHTML !== html) status.innerHTML = html
+      for (const id of opened) document.getElementById(id)?.setAttribute("open", "")
+      if (action) [...status.querySelectorAll("form")].find(form => form.getAttribute("action") === action)?.querySelector("button")?.focus({preventScroll: true})
+      if (summary) document.getElementById(summary)?.querySelector("summary")?.focus({preventScroll: true})
+    }
+  } catch (error) { /* Keep the current list if a refresh fails. */ }
   finally { setTimeout(refresh, 2000) }
 }
 setTimeout(refresh, 2000)

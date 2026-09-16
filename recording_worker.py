@@ -298,13 +298,45 @@ def probe_url(url, events):
     events.send("probe", live=bool(info.get("is_live") or info.get("live_status") == "is_live"))
 
 
-def run_job(url, directory, job_id, events, control, *, live_only=False):
+def run_job(url, directory, job_id, events, control, *, live_only=False, single_video=False, discover=False):
     from yt_dlp import YoutubeDL
     from yt_dlp.postprocessor.common import PostProcessor
 
     files = []
     live = False
     last_progress = None
+    playlist = False
+
+    class JobDL(YoutubeDL):
+        def process_ie_result(self, info, download=True, extra_info=None):
+            nonlocal playlist
+            if info.get("_type") not in ("playlist", "multi_video"):
+                if discover and info.get("_type", "video") == "video":
+                    events.send("metadata", title=info.get("title") or "Untitled",
+                                live=bool(info.get("is_live") or info.get("live_status") == "is_live"))
+                    return info
+                return super().process_ie_result(info, download=download, extra_info=extra_info)
+            if live_only or single_video:
+                raise ValueError("Expected one video or live stream, but this entry is a playlist")
+            playlist = True
+            events.send("playlist", title=info.get("title") or "Playlist")
+
+            def entries(items):
+                for item in items:
+                    if item and item.get("_type") in ("playlist", "multi_video"):
+                        yield from entries(item.get("entries") or [])
+                    else:
+                        yield item
+
+            # Extractors supply lazy entry iterators. Do not fully extract or
+            # download each entry here: the application admits separate workers.
+            for item in entries(info.get("entries") or []):
+                item = item or {}
+                entry_url = item.get("webpage_url") or item.get("url")
+                events.send("entry", title=item.get("title") or item.get("id"), url=entry_url,
+                            error=None if entry_url else "This playlist entry is unavailable")
+            events.send("playlist_complete")
+            return info
 
     class FilePP(PostProcessor):
         def run(self, info):
@@ -362,13 +394,16 @@ def run_job(url, directory, job_id, events, control, *, live_only=False):
         "match_filter": metadata,
         "progress_hooks": [progress],
         "postprocessor_hooks": [postprocess],
-        "noplaylist": live_only,
+        "noplaylist": live_only or single_video,
     }
-    with controlled_ffmpeg(control), YoutubeDL(options) as ydl:
+    with controlled_ffmpeg(control), JobDL(options) as ydl:
         ydl.add_post_processor(FilePP(), when="after_move")
         result = ydl.download([url])
     if result:
         raise RuntimeError(f"yt-dlp could not complete the download (exit code {result}).")
+    if playlist or discover:
+        control.finish()
+        return
     if not files:
         raise RuntimeError("The stream is no longer live." if live_only and not live else "The download finished without a media file.")
     control.finish()
@@ -387,12 +422,13 @@ def main():
             if len(sys.argv) == 3 and sys.argv[1] == "--probe":
                 probe_url(sys.argv[2], events)
             else:
-                live_only = len(sys.argv) == 5 and sys.argv[4] == "--live-only"
-                if len(sys.argv) != 4 and not live_only:
+                flags = sys.argv[4:]
+                if len(sys.argv) < 4 or any(flag not in ("--live-only", "--single-video", "--discover") for flag in flags):
                     raise ValueError("Expected URL, download directory, and job ID.")
                 signal.signal(signal.SIGTERM, cancel_transfer)
                 Thread(target=read_commands, args=(sys.stdin, control), daemon=True).start()
-                run_job(*sys.argv[1:4], events, control, live_only=live_only)
+                run_job(*sys.argv[1:4], events, control, live_only="--live-only" in flags,
+                        single_video="--single-video" in flags, discover="--discover" in flags)
         except DownloadStopped:
             control.finish()
             events.send("stopped")

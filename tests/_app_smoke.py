@@ -32,6 +32,15 @@ LARGE_MEDIA = audio_fixture(60)
 
 class MediaHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/metadata/playlist-next":
+            self.server.listing_arrived.set()
+            if not self.server.release_listing.wait(15):
+                self.send_error(503, "Playlist discovery was not released")
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"next playlist page")
+            return
         if self.path == "/media/failure.wav":
             self.send_error(404, "Fixture media does not exist")
             return
@@ -83,6 +92,8 @@ class AppSmokeTests(unittest.TestCase):
         cls.server.arrivals = 0
         cls.server.both_arrived = Event()
         cls.server.release = Event()
+        cls.server.listing_arrived = Event()
+        cls.server.release_listing = Event()
         cls.server_thread = Thread(target=cls.server.serve_forever, daemon=True)
         cls.server_thread.start()
         cls.base_url = f"http://127.0.0.1:{cls.server.server_port}"
@@ -106,6 +117,8 @@ class AppSmokeTests(unittest.TestCase):
         self.server.arrivals = 0
         self.server.both_arrived.clear()
         self.server.release.clear()
+        self.server.listing_arrived.clear()
+        self.server.release_listing.clear()
         self.client = web.app.test_client()
 
     def submit(self, path):
@@ -205,6 +218,36 @@ class AppSmokeTests(unittest.TestCase):
         finished = self.wait_for_jobs(2)
         self.assertEqual(len({job["file"] for job in finished}), 2)
         for job in finished:
+            self.assert_served(job)
+
+    def test_real_playlist_discovers_while_individual_videos_download(self):
+        self.submit("/fixture/playlist")
+        try:
+            self.assertTrue(self.server.listing_arrived.wait(10), "Discovery did not request the next page")
+            self.assertTrue(self.server.both_arrived.wait(10), "Playlist videos did not download concurrently")
+            with web.lock:
+                playlist = next(job for job in web.jobs if job.get("kind") == "playlist")
+                self.assertEqual(web.playlist_counts(playlist)["active"], 2)
+                self.assertFalse(playlist["discovery_done"])
+            self.server.release.set()
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                with web.lock:
+                    if web.playlist_counts(playlist)["complete"] == 2:
+                        break
+                time.sleep(.025)
+            self.assertEqual(web.playlist_counts(playlist)["complete"], 2)
+            self.assertFalse(playlist["discovery_done"])
+        finally:
+            self.server.release.set()
+            self.server.release_listing.set()
+        finished = self.wait_for_jobs(4)
+        self.assertEqual(playlist["status"], "complete")
+        self.assertEqual(web.playlist_counts(playlist)["total"], 3)
+        self.assertEqual(self.client.get(f'/download/{playlist["id"]}').status_code, 404)
+        files = [job for job in finished if job.get("kind") != "playlist"]
+        self.assertEqual(len(files), 3)
+        for job in files:
             self.assert_served(job)
 
     def test_download_failure_is_not_completed(self):

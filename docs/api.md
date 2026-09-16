@@ -45,8 +45,10 @@ Example response:
     "id": "job-id",
     "url": "https://example.com/video",
     "title": "Loading…",
-    "status": "starting",
-    "progress": "0%",
+    "status": "discovering",
+    "progress": "Loading…",
+    "kind": "video",
+    "playlist_id": null,
     "live": false,
     "can_stop": false,
     "task_id": null,
@@ -63,7 +65,8 @@ A 202 response means the job was accepted, not completed. A reused job returns
 200 with `created: false`. Both responses set `Location` to `job.status_url`.
 IDs and the initial state can differ from the example.
 
-Active states: `starting`, `downloading`, `recording`, `stopping`, `finalizing`.
+Unfinished states: `queued`, `discovering`, `starting`, `downloading`,
+`recording`, `stopping`, `finalizing`.
 Final states: `complete`, `stopped`, `failed`, `interrupted`.
 
 `live` is false until metadata identifies a live stream. `can_stop` means Stop
@@ -75,11 +78,54 @@ duration. If the duration is unknown, they show `Recorded`. Ordinary downloads
 still show `100%` when complete.
 
 GET `/downloads` lists jobs by creation time, newest first. Use `?status=active`
-or an exact state to filter the list. There is no pagination.
+for all unfinished jobs, including queued jobs, or an exact state such as
+`?status=queued`. There is no pagination.
+
+`YTDLP_MAX_CONCURRENT_DOWNLOADS` sets the shared limit (default 3). Jobs wait
+in `queued` when no download slot is available. The limit includes live streams
+and file finalization, but downloads started by Tasks do not use or wait for
+these slots. Metadata and playlist discovery have a separate bounded capacity
+and do not consume download slots. On restart, all unfinished jobs become
+`interrupted`. They do not resume automatically.
 
 The Downloads page has X and Clear all controls for completed entries. These
 hide entries from the page only, including after a restart. They do not delete
 files or API history. Existing playback and API file links still work.
+
+### Playlists
+
+Submit a playlist through the same POST route. The accepted job keeps its ID
+and changes `kind` from `video` to `playlist` when the playlist is identified.
+Discovery adds individual video jobs as it finds entries. Each video has its
+own status and file link. Queued videos start in ready-queue order.
+
+A playlist job also returns:
+
+| Field | Meaning |
+| --- | --- |
+| `entries` | Objects with a video job `id`; `cancelled: true` means this playlist no longer needs that shared job |
+| `counts` | `total`, `complete`, `active`, `queued`, `stopped`, and `failed` counts |
+| `discovery_done` | No more entries will be added, including after a stopped or failed listing |
+
+`total` counts entries found so far, not an estimated final size. Duplicate
+URLs within the playlist use one entry. Unavailable entries have failed video
+jobs. A listing failure sets the playlist's `error`; already queued videos can
+still finish. Playlist jobs have no file link, even when `complete`.
+
+New video jobs have `playlist_id` set to the playlist that created them. An
+existing unfinished video can be shared by several playlists; use each
+playlist's `entries` to find all members. A playlist finishes after discovery
+ends and its videos finish. Any failed video makes the playlist `failed`;
+otherwise a cancelled video makes it `stopped`, unless Stop already set that
+outcome. Completed video links remain available in all cases. Hiding a
+completed video does not change playlist counts.
+
+### URL rules
+
+Submit HTTP or HTTPS URLs without embedded credentials. Host names, default
+ports, and fragments are normalized. Different paths or query strings can be
+different jobs. An unfinished job reserves its URL from queueing through worker
+exit. After it ends, submitting the URL creates a new download.
 
 ### Stop
 
@@ -97,6 +143,14 @@ files are retained. Submit the URL again to start a new download.
 
 For a live recording, Stop lets FFmpeg finish and saves the playable recording
 as `complete`. Other jobs continue in both cases.
+
+For a queued video, Stop cancels it without starting a worker and returns 200
+with `status: stopped` and `progress: Cancelled`.
+
+For a playlist, Stop ends discovery, cancels queued videos, and stops active
+videos. Live recordings finish normally; file finalization is not interrupted.
+A video needed by another active playlist or a separate request continues;
+its entry in the stopped playlist has `cancelled: true`.
 
 Stop returns 409 while a job is not yet ready or is finalizing. A download that
 finishes as Stop is requested can still end as `complete`. Poll until the job ends.
