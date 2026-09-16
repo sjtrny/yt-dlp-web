@@ -52,7 +52,10 @@ def init_runtime():
             else:
                 errors.append((job, job.get("error", "Download interrupted")))
         store = candidate
-        scheduler = TaskScheduler(store, lock, submit_download, active_download, probe_live)
+        scheduler = TaskScheduler(
+            store, lock, submit_download, active_download, probe_live,
+            default_timezone=os.environ.get("YTDLP_DEFAULT_TIMEZONE") or "UTC",
+        )
         scheduler.start()
 
 
@@ -69,26 +72,16 @@ def find_job(job_id):
         return job
 
 
-def submit_download(url, *, request_key=None, task_id=None, live_only=False):
+def submit_download(url, *, task_id=None, live_only=False):
     url = normalize_url(url)
-    if request_key is not None and (not request_key or len(request_key) > 128 or not request_key.isascii()):
-        raise ValueError("Idempotency-Key must contain 1–128 ASCII characters")
     with lock:
-        if request_key:
-            previous = store.request_job(request_key)
-            if previous:
-                if previous["url"] != url:
-                    abort(409, "This Idempotency-Key was already used for another URL")
-                return previous, False
         existing = active_download(url)
         if existing:
-            if request_key:
-                store.link_request(request_key, existing)
             return existing, False
         job = {"id": uuid4().hex, "url": url, "title": "Loading…", "progress": "0%",
                "live": False, "stoppable": False, "stopping": False, "status": "starting",
                "created_at": time.time(), "finished_at": None, "task_id": task_id, "live_only": live_only}
-        store.save_job(job, request_key=request_key)
+        store.save_job(job)
         jobs.append(job)
         try:
             Thread(target=download, args=(job,), daemon=True, name=f"download-{job['id'][:8]}").start()
@@ -330,7 +323,7 @@ def api_health():
 def api_downloads():
     if request.method == "POST":
         data = json_object({"url"})
-        job, created = submit_download(data.get("url"), request_key=request.headers.get("Idempotency-Key"))
+        job, created = submit_download(data.get("url"))
         with lock:
             result = job_json(job)
         return jsonify(job=result, created=created), 202 if created else 200, {"Location": result["status_url"]}
@@ -416,7 +409,7 @@ def tasks_page():
     tasks = [task_json(task) for task in scheduler.list()]
     return render_template(
         "tasks.html", tasks=tasks, checking=any(task["checking"] for task in tasks),
-        new_task={"name": "", "url": "", "cron": "*/5 * * * *", "timezone": "UTC",
+        new_task={"name": "", "url": "", "cron": "*/5 * * * *", "timezone": scheduler.default_timezone,
                   "mode": "live", "enabled": True},
     )
 

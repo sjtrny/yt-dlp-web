@@ -144,6 +144,31 @@ class AppSmokeTests(unittest.TestCase):
         self.assertIn("404", status)
         failed_job, _ = web.errors[0]
         self.assertEqual(self.client.get(f"/download/{failed_job['id']}").status_code, 404)
+        response = self.client.post("/api/v1/downloads", json={"url": failed_job["url"]})
+        self.assertEqual(response.status_code, 202)
+        self.assertNotEqual(response.get_json()["job"]["id"], failed_job["id"])
+        self.wait_for_jobs(0, errors=2)
+
+    def test_repeated_download_keeps_both_files(self):
+        url = self.base_url + "/fixture/repeated"
+        first_response = self.client.post("/api/v1/downloads", json={"url": url})
+        self.assertEqual(first_response.status_code, 202)
+        [first] = self.wait_for_jobs(1)
+        first_path = Path(first["file"])
+        first_stat = first_path.stat()
+
+        second_response = self.client.post("/api/v1/downloads", json={"url": url})
+        self.assertEqual(second_response.status_code, 202)
+        self.assertTrue(second_response.get_json()["created"])
+        self.assertNotEqual(second_response.get_json()["job"]["id"], first["id"])
+        finished = self.wait_for_jobs(2)
+        self.assertEqual(len({job["file"] for job in finished}), 2)
+        self.assertEqual(first_path.stat().st_mtime_ns, first_stat.st_mtime_ns)
+        for job in finished:
+            self.assert_served(job)
+            with self.client.get(f"/api/v1/downloads/{job['id']}/file") as response:
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.data, MEDIA)
 
 
 if __name__ == "__main__":
