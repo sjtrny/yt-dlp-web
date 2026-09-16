@@ -6,6 +6,8 @@ Real yt-dlp, HLS and FFmpeg are exercised separately by the runtime suite.
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import time
 
@@ -37,5 +39,14 @@ else:
     while not (barriers / "release-finalizing").exists():
         time.sleep(.01)
     output = Path(directory) / f"{job_id}.mp4"
-    output.write_bytes(b"controlled test output; not actual media")
-    emit("complete", file=str(output))
+    media = os.environ.get("YTDLP_TEST_MEDIA_FILE")
+    if media:
+        shutil.copyfile(media, output)
+        duration = float(subprocess.check_output(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(output)], text=True,
+        ))
+    else:
+        output.write_bytes(b"controlled test output; not actual media")
+        duration = 4980
+    emit("complete", file=str(output), duration=duration)

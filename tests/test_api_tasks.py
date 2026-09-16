@@ -108,6 +108,11 @@ class ApiTaskTests(unittest.TestCase):
         self.finish(repeated_job)
         self.assertEqual(len(web.complete), 2)
         self.assertEqual(len({item["file"] for item in web.complete}), 2)
+        for item in (job, repeated_job):
+            self.assertEqual(self.client.get(item["status_url"]).get_json()["job"]["progress"], "Recorded - 1h 23m")
+        status = self.client.get("/status").get_data(as_text=True)
+        self.assertIn("Recorded - 1h 23m", status)
+        self.assertNotIn("100%", status)
         self.assertEqual(self.client.post(f"/api/v1/downloads/{job['id']}/stop").status_code, 200)
         for item in (job, repeated_job):
             with self.client.get(f"/api/v1/downloads/{item['id']}/file") as response:
@@ -267,6 +272,9 @@ class ApiTaskTests(unittest.TestCase):
         task = self.create_task(enabled=False)
         job = self.submit().get_json()["job"]
         self.finish(job)
+        legacy = dict(web.complete[0], progress="100%")
+        legacy.pop("duration")
+        web.store.save_job(legacy)
         # Old databases can contain request keys; they must not affect downloads.
         with web.store.connection() as db:
             db.execute("CREATE TABLE requests (key TEXT PRIMARY KEY, url TEXT NOT NULL, job_id TEXT NOT NULL)")
@@ -286,6 +294,8 @@ class ApiTaskTests(unittest.TestCase):
         self.assertEqual(web.scheduler.get(task["id"])["url"], task["url"])
         self.assertEqual(self.client.get("/api/v1/downloads/interrupted-fixture").get_json()["job"]["status"], "interrupted")
         self.assertFalse(web.jobs)
+        self.assertEqual(self.client.get(job["status_url"]).get_json()["job"]["progress"], "Recorded")
+        self.assertNotIn("100%", self.client.get("/status").get_data(as_text=True))
         with self.client.get(f"/api/v1/downloads/{job['id']}/file") as response:
             self.assertEqual(response.status_code, 200)
         repeat = self.submit(headers={"Idempotency-Key": "persisted-request"})

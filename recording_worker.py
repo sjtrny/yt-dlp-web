@@ -6,6 +6,7 @@ The parent reads newline-delimited JSON from stdout and writes ``{"action":
 
 from contextlib import contextmanager
 import json
+import math
 import os
 from pathlib import Path
 import stat
@@ -178,7 +179,7 @@ def probe_media(path):
     result = subprocess.run(
         ["ffprobe", "-v", "error", "-read_intervals", "%+1",
          "-show_entries",
-         "format=format_name:stream=index,codec_type,codec_name,width,height,sample_rate,channels:packet=stream_index,size",
+         "format=format_name,duration:stream=index,codec_type,codec_name,width,height,sample_rate,channels:packet=stream_index,size",
          "-of", "json", str(path)],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, timeout=60,
@@ -215,7 +216,7 @@ def finalize_file(filename, *, live):
     info = probe_media(path)
     formats = info.get("format", {}).get("format_name", "").split(",")
     if not live or path.suffix.lower() != ".mp4" or "mpegts" not in formats:
-        return path
+        return path, info
 
     # A replaceable backend can write transport-stream data to an .mp4 path.
     # Inspect actual media instead of relying on its protocol name or suffix.
@@ -242,7 +243,28 @@ def finalize_file(filename, *, live):
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
-    return path
+    return path, verified
+
+
+def publish_file(path, filename):
+    """Reserve a readable name before moving media; never replace an old file."""
+    destination = path.with_name(filename)
+    number = 1
+    while True:
+        try:
+            with destination.open("xb"):
+                pass
+        except FileExistsError:
+            number += 1
+            name = Path(filename)
+            destination = path.with_name(f"{name.stem} ({number}){name.suffix}")
+            continue
+        try:
+            path.replace(destination)
+        except OSError:
+            destination.unlink(missing_ok=True)
+            raise
+        return destination
 
 
 def probe_url(url, events):
@@ -276,11 +298,22 @@ def run_job(url, directory, job_id, events, control, *, live_only=False):
 
     class FilePP(PostProcessor):
         def run(self, info):
-            path = finalize_file(
+            path, media = finalize_file(
                 info["filepath"],
                 live=bool(info.get("is_live") or info.get("live_status") == "is_live"),
             )
-            files.append(path)
+            filename = Path(self._downloader.prepare_filename(
+                info, outtmpl="%(title).150B %(epoch>%Y-%m-%d %H_%M)s.%(ext)s",
+            )).name
+            path = publish_file(path, filename)
+            info["filepath"] = str(path)
+            try:
+                duration = float(media.get("format", {}).get("duration"))
+            except (TypeError, ValueError):
+                duration = None
+            if duration is not None and (not math.isfinite(duration) or duration < 0):
+                duration = None
+            files.append((path, duration))
             return [], info
 
     def metadata(info, *, incomplete):
@@ -310,7 +343,8 @@ def run_job(url, directory, job_id, events, control, *, live_only=False):
 
     options = {
         "paths": {"home": str(Path(directory).resolve())},
-        "outtmpl": {"default": f"%(title).150B [%(id).40B] [{job_id}].%(ext)s"},
+        # Isolate partial files until verified media gets its readable name.
+        "outtmpl": {"default": f".%(title).150B [{job_id}].%(ext)s"},
         "match_filter": metadata,
         "progress_hooks": [progress],
         "noplaylist": live_only,
@@ -323,7 +357,8 @@ def run_job(url, directory, job_id, events, control, *, live_only=False):
     if not files:
         raise RuntimeError("The stream is no longer live." if live_only and not live else "The download finished without a media file.")
     control.finish()
-    events.send("complete", file=str(files[-1]))
+    path, duration = files[-1]
+    events.send("complete", file=str(path), duration=duration)
 
 
 def main():
