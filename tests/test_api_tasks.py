@@ -17,12 +17,15 @@ from state import StateStore
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class ApiTaskTests(unittest.TestCase):
+class DownloadTestCase(unittest.TestCase):
+    limit = 3
+
     def setUp(self):
         self.temp = TemporaryDirectory(prefix="yt-dlp-web-api-")
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
         self.patch_env = patch.dict(os.environ, {"YTDLP_STATE_DIR": str(self.directory / "state"),
+                                                 "YTDLP_MAX_CONCURRENT_DOWNLOADS": str(self.limit),
                                                  "YTDLP_TEST_BARRIER_DIR": str(self.directory)})
         self.patch_env.start()
         self.addCleanup(self.patch_env.stop)
@@ -82,6 +85,8 @@ class ApiTaskTests(unittest.TestCase):
         self.wait_for(lambda: not web.scheduler.get(task["id"])["checking"])
         return web.scheduler.get(task["id"])
 
+
+class ApiTaskTests(DownloadTestCase):
     def test_parallel_requests_ui_and_repeated_downloads(self):
         def submit(index):
             client = web.app.test_client()

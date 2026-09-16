@@ -7,7 +7,7 @@ from pathlib import Path
 import sqlite3
 
 
-ACTIVE_STATES = ("starting", "downloading", "recording", "stopping", "finalizing")
+ACTIVE_STATES = ("queued", "starting", "discovering", "downloading", "recording", "stopping", "finalizing")
 
 
 class StateStore:
@@ -27,10 +27,12 @@ class StateStore:
                     id TEXT PRIMARY KEY, url TEXT NOT NULL,
                     status TEXT NOT NULL, data TEXT NOT NULL
                 );
-                CREATE UNIQUE INDEX IF NOT EXISTS one_active_url ON jobs(url)
-                    WHERE status IN ('starting', 'downloading', 'recording', 'stopping', 'finalizing');
                 CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, data TEXT NOT NULL);
             """)
+            # Extend the existing ownership index to queued jobs and discovery.
+            db.execute("DROP INDEX IF EXISTS one_active_url")
+            states = ", ".join(f"'{state}'" for state in ACTIVE_STATES)
+            db.execute(f"CREATE UNIQUE INDEX one_active_url ON jobs(url) WHERE status IN ({states})")
 
     @contextmanager
     def connection(self):

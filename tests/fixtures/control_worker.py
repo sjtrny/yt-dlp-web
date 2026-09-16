@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import time
+from urllib.parse import urlsplit
 
 
 def emit(event, **fields):
@@ -30,17 +31,43 @@ if sys.argv[1] == "--probe":
     emit("probe", live="offline" not in url and "upcoming" not in url)
 else:
     url, directory, job_id = sys.argv[1:4]
+    if "/playlist" in url:
+        emit("playlist", title="Controlled playlist")
+        for index in range(1, 7):
+            emit("entry", title=f"Video {index}", url=f"https://example.test/video-entry-{index}")
+            if index == 2 and "slow" in url:
+                (barriers / "discovery-arrived").touch()
+                while not (barriers / "release-discovery").exists():
+                    time.sleep(.01)
+            if index == 2 and "broken" in url:
+                emit("error", error="Playlist listing failed")
+                sys.exit(1)
+        if "mixed" in url:
+            emit("entry", title="Duplicate", url="https://example.test/video-entry-1")
+            emit("entry", title="Unavailable video", error="Private video")
+        emit("playlist_complete")
+        sys.exit(0)
     ordinary = "/video" in url
     if "/video-blocked" in url:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    emit("metadata", title="Controlled video" if ordinary else "Controlled recording", live=not ordinary)
+    entry = urlsplit(url).path.removeprefix("/") if "/video-entry-" in url else None
+    emit("metadata", title=f"Video {entry.rsplit('-', 1)[1]}" if entry else "Controlled video" if ordinary else "Controlled recording", live=not ordinary)
+    if "--discover" in sys.argv[4:]:
+        sys.exit(0)
     emit("recording", stoppable=True)
-    for line in sys.stdin:
-        if json.loads(line).get("action") == "stop":
-            break
-    emit("stopping")
+    if entry:
+        (barriers / f"started-{entry}").touch()
+        (Path(directory) / f"{job_id}.part").write_bytes(b"partial media")
+        emit("progress", progress="42.0%")
+        while not (barriers / f"release-{entry}").exists():
+            time.sleep(.01)
+    else:
+        for line in sys.stdin:
+            if json.loads(line).get("action") == "stop":
+                break
+        emit("stopping")
     emit("finalizing")
-    while not (barriers / "release-finalizing").exists():
+    while not entry and not (barriers / "release-finalizing").exists():
         time.sleep(.01)
     output = Path(directory) / f"{job_id}.mp4"
     media = os.environ.get("YTDLP_TEST_MEDIA_FILE")

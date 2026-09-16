@@ -1,12 +1,34 @@
-{% if jobs %}<h2>Active</h2>{% endif %}
-{% for job in jobs %}
-<div class="job" id="job-{{ job.id }}">
+{% macro active_job(job, prefix='') %}
+<div class="job" id="{{ prefix }}job-{{ job.id }}">
   <a href="{{ job.url }}" target="_blank" rel="noopener">{{ job.title }}</a>
   <div class="job-status">
     <span>{{ job.progress }}</span>
-    <form method="post" action="/stop/{{ job.id }}"><button {% if job.stopping or not job.stoppable %}disabled{% endif %}>Stop</button></form>
+    <form method="post" action="/stop/{{ job.id }}"><button {% if job.stopping or not job.stoppable %}disabled{% endif %}>{{ 'Cancel' if job.status == 'queued' else 'Stop' }}</button></form>
   </div>
 </div>
+{% endmacro %}
+{% if jobs or playlists %}<h2>Active</h2>{% endif %}
+{% for group in playlists %}
+<section class="playlist" id="playlist-{{ group.job.id }}">
+  <div class="playlist-heading">
+    <h3><span class="playlist-label">Playlist</span> <a href="{{ group.job.url }}" target="_blank" rel="noopener">{{ group.job.title }}</a></h3>
+    <form method="post" action="/stop/{{ group.job.id }}"><button {% if group.job.stopping %}disabled{% endif %}>Stop playlist</button></form>
+  </div>
+  <p class="playlist-progress">{% if group.job.discovery_done %}{{ group.counts.complete }} of {{ group.counts.total }} complete{% else %}{{ group.counts.complete }} complete · {{ group.counts.total }} found{% endif %} · {{ group.counts.active }} active · {{ group.counts.queued }} queued{% if group.counts.failed %} · {{ group.counts.failed }} failed{% endif %}{% if group.counts.stopped %} · {{ group.counts.stopped }} stopped{% endif %}{% if group.job.stopping %} · Stopping…{% elif not group.job.discovery_done %} · Loading playlist…{% endif %}</p>
+  {% if group.job.error %}<p class="error">{{ group.job.error }}</p>{% endif %}
+  {% for job in group.active %}{{ active_job(job, group.job.id ~ '-') }}{% endfor %}
+  {% if group.queued %}
+  <details id="queued-{{ group.job.id }}">
+    <summary>{{ group.queued | length }} queued videos</summary>
+    {% for job in group.queued %}{{ active_job(job, group.job.id ~ '-') }}{% endfor %}
+  </details>
+  {% endif %}
+</section>
+{% endfor %}
+{% for job in jobs %}{{ active_job(job) }}{% endfor %}
+{% if queued %}<h2>Queued</h2>{% endif %}
+{% for job in queued %}
+{{ active_job(job) }}
 {% endfor %}
 {% set visible_complete = complete | rejectattr("hidden") | list %}
 {% if visible_complete %}
