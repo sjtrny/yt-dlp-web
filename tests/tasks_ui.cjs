@@ -93,7 +93,8 @@ test('server-rendered UI', async () => {
     fs.writeFileSync(path.join(directory, 'release-finalizing'), '');
     const completedLink = page.locator('a[href^="/download/"]');
     await completedLink.waitFor();
-    assert.equal(await completedLink.locator('..').locator('span').textContent(), 'Recorded - 3s');
+    assert.equal(await completedLink.textContent(), 'Recorded - 3s');
+    assert.equal(await page.getByRole('link', {name: 'Controlled recording', exact: true}).getAttribute('href'), 'https://example.test/live');
     assert.equal(await page.locator('script').count(), 1);
     const [playback] = await Promise.all([page.waitForEvent('popup'), completedLink.click()]);
     await playback.waitForLoadState('domcontentloaded');
@@ -229,7 +230,9 @@ test('server-rendered UI', async () => {
     assert.notEqual(await queued.getAttribute('open'), null, 'Refresh must retain the open queue');
     await queued.locator('.job').filter({hasText: 'Video 6'}).getByRole('button', {name: 'Cancel'}).click();
     await playlist.getByText('1 of 6 complete · 2 active · 2 queued · 1 stopped', {exact: true}).waitFor();
-    const playlistFile = page.getByRole('link', {name: 'Video 1', exact: true});
+    const playlistSource = page.getByRole('link', {name: 'Video 1', exact: true});
+    assert.equal(await playlistSource.getAttribute('href'), 'https://example.test/video-entry-1');
+    const playlistFile = page.locator('.job').filter({has: playlistSource}).getByRole('link', {name: '100%', exact: true});
     const playlistFileUrl = await playlistFile.getAttribute('href');
     for (const width of [1000, 390]) {
       await page.setViewportSize({width, height: 900});
@@ -241,7 +244,7 @@ test('server-rendered UI', async () => {
     }
     await playlist.getByRole('button', {name: 'Stop playlist', exact: true}).click();
     await playlist.waitFor({state: 'detached'});
-    assert.equal(await page.getByRole('link', {name: 'Video 1', exact: true}).getAttribute('href'), playlistFileUrl);
+    assert.equal(await playlistFile.getAttribute('href'), playlistFileUrl);
     assert.equal((await fetch(`${url}${playlistFileUrl}`)).status, 200);
     assert.equal(fs.existsSync(path.join(directory, 'started-video-entry-6')), false);
     assert.equal(await page.getByRole('heading', {name: 'Failed', exact: true}).count(), 0);

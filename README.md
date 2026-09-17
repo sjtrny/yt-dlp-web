@@ -17,7 +17,8 @@ Open <http://localhost:8080>.
 Paste a video, live-stream, or playlist URL and select **Download**.
 Playlists show a group with completed, active, and queued counts. Videos enter
 the queue as they are found. Expand the queued list to see the remaining videos.
-Each finished video has its own playback link.
+Select a title to open its source. For a finished video, select its status
+(**100%** or **Recorded**) to open the downloaded file.
 
 **Cancel** removes a queued video from the queue. **Stop playlist** stops its
 downloads and cancels its queued videos. A video shared with another active
