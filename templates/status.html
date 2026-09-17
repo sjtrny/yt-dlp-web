@@ -38,9 +38,9 @@
 {% endif %}
 {% for job in complete %}
 <div class="job">
-  <a href="/download/{{ job.id }}" target="_blank" rel="noopener">{{ job.title }}</a>
+  <a href="{{ job.url }}" target="_blank" rel="noopener">{{ job.title }}</a>
   <div class="job-status">
-    <span>{{ job | download_progress }}</span>
+    <a href="/download/{{ job.id }}" target="_blank" rel="noopener">{{ job | download_progress }}</a>
     <form method="post" action="/completed/{{ job.id }}/remove"><button aria-label="Remove {{ job.title }} from completed list" title="Remove from list; keep file">X</button></form>
   </div>
 </div>
